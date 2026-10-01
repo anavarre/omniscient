@@ -74,13 +74,13 @@ Rectangle {
         NavItem {
             text: "Projects"
             glyph: Icons.folder
-            count: String((root.s.projects || []).length)
+            count: String(Store.projects.length)
             current: Store.page === "projects"
             onClicked: Store.go("projects")
         }
 
         Txt {
-            visible: (root.s.projects || []).length > 0
+            visible: Store.projects.length > 0
             text: "PROJECTS"
             color: Theme.fgDim
             font.pixelSize: Theme.caption
@@ -95,7 +95,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            model: root.s.projects || []
+            model: Store.projects
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
             delegate: NavItem {
@@ -108,7 +108,7 @@ Rectangle {
                 onClicked: Store.go("project", modelData.id)
             }
         }
-        Item { visible: (root.s.projects || []).length === 0; Layout.fillHeight: true }
+        Item { visible: Store.projects.length === 0; Layout.fillHeight: true }
 
         Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline; Layout.bottomMargin: Theme.sp(6) }
         NavItem {

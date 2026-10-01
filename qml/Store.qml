@@ -11,6 +11,23 @@ QtObject {
     readonly property var s: parse(App.state)
     readonly property string page: s.page || "tasks"
 
+    // Lists handed to views only change identity when their content does,
+    // so delegates aren't rebuilt after every unrelated action.
+    property var projects: []
+    property var groupings: []
+    property var identity: null
+    property string _projectsKey: ""
+    property string _groupingsKey: ""
+    property string _identityKey: ""
+    onSChanged: {
+        const pk = JSON.stringify(s.projects || [])
+        if (pk !== _projectsKey) { _projectsKey = pk; projects = s.projects || [] }
+        const gk = JSON.stringify(s.groupings || [])
+        if (gk !== _groupingsKey) { _groupingsKey = gk; groupings = s.groupings || [] }
+        const ik = JSON.stringify(s.identity || null)
+        if (ik !== _identityKey) { _identityKey = ik; identity = s.identity || null }
+    }
+
     function parse(json) {
         try {
             return JSON.parse(json)

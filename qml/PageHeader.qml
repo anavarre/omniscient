@@ -101,20 +101,21 @@ ColumnLayout {
     }
 
     RowLayout {
-        visible: (root.s.groupings || []).length > 0
+        visible: Store.groupings.length > 0
         Layout.fillWidth: true
         Layout.topMargin: Theme.sp(4)
         spacing: Theme.sp(10)
         Segmented {
             visible: Store.page === "tasks" && !!root.s.identity
-            options: [{ value: "mine", label: "Mine", hint: root.narrow ? "" : "g m" }, { value: "all", label: "All", hint: root.narrow ? "" : "g a" }]
+            readonly property var mineAll: [{ value: "mine", label: "Mine", hint: root.narrow ? "" : "g m" }, { value: "all", label: "All", hint: root.narrow ? "" : "g a" }]
+            options: mineAll
             current: root.s.mine ? "mine" : "all"
             onPicked: value => Store.act("filter", { mine: value === "mine" })
         }
         Item { Layout.fillWidth: true }
         Txt { visible: !root.narrow; text: "Group by"; color: Theme.fgDim; font.pixelSize: Theme.small }
         Segmented {
-            options: (root.s.groupings || []).map(g => ({ value: g, label: root.groupLabels[g], hint: root.narrow ? "" : root.groupKeys[g] }))
+            options: Store.groupings.map(g => ({ value: g, label: root.groupLabels[g], hint: root.narrow ? "" : root.groupKeys[g] }))
             current: root.s.grouping || "date"
             onPicked: value => Store.act("group", { by: value })
         }

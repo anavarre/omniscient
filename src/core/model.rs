@@ -180,6 +180,18 @@ impl Snapshot {
         ids
     }
 
+    pub fn count_open_top_level(&self, scope: Scope) -> usize {
+        self.tasks
+            .values()
+            .filter(|t| !t.completed() && t.parent_id.is_none())
+            .filter(|t| match scope {
+                Scope::All => true,
+                Scope::Mine(person) => t.people.contains(&person),
+                Scope::Project(project) => t.project_id == project,
+            })
+            .count()
+    }
+
     /// Overdue / Today / Tomorrow / Later. Mine shows every task due today;
     /// elsewhere Today, Tomorrow and Later each show the first ten.
     pub fn date_sections(&self, scope: Scope) -> Vec<Section> {

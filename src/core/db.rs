@@ -107,6 +107,8 @@ impl Created {
 
 pub struct Db {
     conn: Connection,
+    /// Rows changed by settings writes, which never affect the snapshot.
+    setting_changes: std::cell::Cell<u64>,
 }
 
 pub fn default_path() -> PathBuf {
@@ -146,7 +148,7 @@ impl Db {
     fn init(conn: Connection) -> Result<Db> {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
             .map_err(err)?;
-        let db = Db { conn };
+        let db = Db { conn, setting_changes: std::cell::Cell::new(0) };
         db.migrate()?;
         Ok(db)
     }
@@ -170,9 +172,9 @@ impl Db {
 
     pub fn snapshot(&self) -> Result<Snapshot> {
         let c = &self.conn;
-        let mut tasks: HashMap<i64, Task> = HashMap::new();
+        let mut tasks: HashMap<i64, Task> = HashMap::with_capacity(1024);
         let mut stmt = c
-            .prepare(
+            .prepare_cached(
                 "SELECT id, project_id, parent_task_id, what, due_on, due_on_auto_set, link, notes,
                         completed_at, in_progress_at, position FROM tasks",
             )
@@ -204,27 +206,27 @@ impl Db {
         }
 
         let mut people: Vec<Person> = c
-            .prepare("SELECT id, name FROM people ORDER BY name COLLATE NOCASE, id")
+            .prepare_cached("SELECT id, name FROM people ORDER BY name COLLATE NOCASE, id")
             .map_err(err)?
             .query_map([], |r| Ok(Person { id: r.get(0)?, name: r.get(1)?, open_tasks: 0 }))
             .map_err(err)?
             .collect::<std::result::Result<_, _>>()
             .map_err(err)?;
 
-        let mut assign = c.prepare("SELECT task_id, person_id FROM task_assignments").map_err(err)?;
+        let mut assign = c.prepare_cached("SELECT task_id, person_id FROM task_assignments").map_err(err)?;
         for row in assign.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).map_err(err)? {
             let (task, person) = row.map_err(err)?;
             if let Some(t) = tasks.get_mut(&task) {
                 t.people.push(person);
             }
         }
-        let mut deps = c.prepare("SELECT task_id, depends_on_task_id FROM task_dependencies").map_err(err)?;
+        let mut deps = c.prepare_cached("SELECT task_id, depends_on_task_id FROM task_dependencies").map_err(err)?;
         let pairs: Vec<(i64, i64)> = deps
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
             .map_err(err)?
             .collect::<std::result::Result<_, _>>()
             .map_err(err)?;
-        for (task, dep) in pairs {
+        for &(task, dep) in &pairs {
             if !(tasks.contains_key(&task) && tasks.contains_key(&dep)) {
                 continue;
             }
@@ -241,21 +243,38 @@ impl Db {
             }
         }
 
-        // Keep chips and assignee lists in a stable, readable order.
+        // Keep chips and assignee lists in a stable, readable order. Only
+        // tasks that appear as chips need their titles folded.
         let names: HashMap<i64, String> = people.iter().map(|p| (p.id, p.name.to_lowercase())).collect();
-        let titles: HashMap<i64, String> = tasks.values().map(|t| (t.id, t.what.to_lowercase())).collect();
+        let titles: HashMap<i64, String> =
+            pairs.iter().flat_map(|(a, b)| [*a, *b]).filter_map(|id| tasks.get(&id).map(|t| (id, t.what.to_lowercase()))).collect();
+        let mut open_by_person: HashMap<i64, usize> = HashMap::new();
         for t in tasks.values_mut() {
-            t.people.sort_by(|a, b| names.get(a).cmp(&names.get(b)));
-            t.needs.sort_by(|a, b| titles.get(a).cmp(&titles.get(b)));
-            t.enables.sort_by(|a, b| titles.get(a).cmp(&titles.get(b)));
+            if t.people.len() > 1 {
+                t.people.sort_by(|a, b| names.get(a).cmp(&names.get(b)));
+            }
+            if t.needs.len() > 1 {
+                t.needs.sort_by(|a, b| titles.get(a).cmp(&titles.get(b)));
+            }
+            if t.enables.len() > 1 {
+                t.enables.sort_by(|a, b| titles.get(a).cmp(&titles.get(b)));
+            }
+            if t.completed_at.is_none() {
+                for p in &t.people {
+                    *open_by_person.entry(*p).or_default() += 1;
+                }
+            }
         }
-
         for p in &mut people {
-            p.open_tasks = tasks.values().filter(|t| !t.completed() && t.people.contains(&p.id)).count();
+            p.open_tasks = open_by_person.get(&p.id).copied().unwrap_or(0);
         }
 
+        let mut open_by_project: HashMap<i64, usize> = HashMap::new();
+        for t in tasks.values().filter(|t| t.completed_at.is_none()) {
+            *open_by_project.entry(t.project_id).or_default() += 1;
+        }
         let projects: Vec<Project> = c
-            .prepare("SELECT id, name, link, notes, archived_at FROM projects ORDER BY name COLLATE NOCASE, id")
+            .prepare_cached("SELECT id, name, link, notes, archived_at FROM projects ORDER BY name COLLATE NOCASE, id")
             .map_err(err)?
             .query_map([], |r| {
                 Ok(Project {
@@ -272,7 +291,7 @@ impl Db {
             .map_err(err)?
             .into_iter()
             .map(|mut p| {
-                p.open_tasks = tasks.values().filter(|t| !t.completed() && t.project_id == p.id).count();
+                p.open_tasks = open_by_project.get(&p.id).copied().unwrap_or(0);
                 p
             })
             .collect();
@@ -284,8 +303,15 @@ impl Db {
         self.conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional().ok().flatten()
     }
 
+    /// Rows changed so far by anything that the snapshot reflects: lets the
+    /// controller skip re-reading after actions that wrote nothing.
+    pub fn data_changes(&self) -> u64 {
+        self.conn.total_changes() - self.setting_changes.get()
+    }
+
     pub fn set_setting(&self, key: &str, value: Option<&str>) -> Result<()> {
-        match value {
+        let before = self.conn.total_changes();
+        let out = match value {
             Some(v) => self.conn.execute(
                 "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = ?2",
                 params![key, v],
@@ -293,7 +319,9 @@ impl Db {
             None => self.conn.execute("DELETE FROM settings WHERE key = ?1", [key]),
         }
         .map(|_| ())
-        .map_err(err)
+        .map_err(err);
+        self.setting_changes.set(self.setting_changes.get() + (self.conn.total_changes() - before));
+        out
     }
 
     fn open_task_count(&self, sql: &str, id: i64) -> Result<i64> {
@@ -1257,5 +1285,34 @@ mod tests {
         );
         assert!(db.import_rails(&rails).is_err(), "only into an empty database");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod perf {
+    /// `OMNISCIENT_BENCH_DB=… cargo test --release bench_snapshot -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_snapshot() {
+        let Some(path) = std::env::var_os("OMNISCIENT_BENCH_DB") else { return };
+        let db = super::Db::open(std::path::Path::new(&path)).unwrap();
+        let _ = db.snapshot().unwrap();
+        let t = std::time::Instant::now();
+        for _ in 0..20 {
+            std::hint::black_box(db.snapshot().unwrap());
+        }
+        eprintln!("snapshot: {:?}", t.elapsed() / 20);
+        let t = std::time::Instant::now();
+        for _ in 0..20 {
+            let mut stmt = db.conn.prepare_cached("SELECT id, project_id, parent_task_id, what, due_on, due_on_auto_set, link, notes, completed_at, in_progress_at, position FROM tasks").unwrap();
+            let n = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(3)?, r.get::<_, String>(7)?))).unwrap().count();
+            std::hint::black_box(n);
+        }
+        eprintln!("tasks query only: {:?}", t.elapsed() / 20);
+        let t = std::time::Instant::now();
+        for i in 0..20 {
+            db.set_in_progress(5, i % 2 == 0).unwrap();
+        }
+        eprintln!("one update: {:?}", t.elapsed() / 20);
     }
 }

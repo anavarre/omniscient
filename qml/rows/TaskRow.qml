@@ -190,22 +190,27 @@ Item {
                 Layout.fillWidth: true
             }
             // Narrow windows stack Who and When under the title.
-            RowLayout {
-                visible: root.narrow
-                spacing: Theme.sp(8)
-                Loader { sourceComponent: whoComponent }
-                Loader { sourceComponent: whenComponent }
+            Loader {
+                active: root.narrow
+                visible: active
+                sourceComponent: RowLayout {
+                    spacing: Theme.sp(8)
+                    Loader { sourceComponent: whoComponent }
+                    Loader { sourceComponent: whenComponent }
+                }
             }
         }
 
         Loader {
-            visible: !root.narrow
+            active: !root.narrow
+            visible: active
             sourceComponent: whoComponent
             Layout.preferredWidth: root.compact ? Theme.sp(120) : Theme.sp(200)
             Layout.alignment: Qt.AlignTop
         }
         Loader {
-            visible: !root.narrow
+            active: !root.narrow
+            visible: active
             sourceComponent: whenComponent
             Layout.preferredWidth: Theme.sp(96)
             Layout.alignment: Qt.AlignTop | Qt.AlignRight

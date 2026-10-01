@@ -201,10 +201,12 @@ impl Controller {
     // ------------------------------------------------------------ actions
 
     pub fn act(&mut self, name: &str, args: &Value) -> Outcome {
+        let before = self.db.data_changes();
         let out = self.dispatch(name, args);
-        // Every write re-reads the database; reads are cheap and it keeps
-        // every view consistent with what was stored.
-        if !matches!(name, "go" | "group" | "filter" | "expand" | "reveal" | "toggleCompleted" | "toggleArchived")
+        // Anything that wrote re-reads the whole database: one source of
+        // truth, every view consistent. UI-only actions (navigation, starting
+        // a countdown) skip it.
+        if (name == "refresh" || self.db.data_changes() != before)
             && let Err(e) = self.reload()
         {
             self.say(e, true);
@@ -612,7 +614,7 @@ impl Controller {
             .collect();
         let (page, title, subtitle, groupings, grouping) = match self.page {
             Page::Tasks => {
-                let n = s.open_top_level(self.scope()).len();
+                let n = s.count_open_top_level(self.scope());
                 let title = match (self.mine, me) {
                     (true, Some(p)) => format!("Hi, {}!", p.name),
                     _ => "All Tasks".to_string(),
@@ -625,7 +627,7 @@ impl Controller {
             }
             Page::Project(id) => {
                 let p = s.project(id);
-                let n = s.open_top_level(Scope::Project(id)).len();
+                let n = s.count_open_top_level(Scope::Project(id));
                 (
                     "project",
                     p.map(|p| p.name.clone()).unwrap_or_default(),
@@ -653,8 +655,8 @@ impl Controller {
             "mine": self.mine,
             "identity": me.map(|p| json!({"id": p.id, "name": p.name, "initials": initials(&p.name)})),
             "projects": active,
-            "openTotal": s.open_top_level(Scope::All).len(),
-            "mineTotal": self.identity.map(|id| s.open_top_level(Scope::Mine(id)).len()),
+            "openTotal": s.count_open_top_level(Scope::All),
+            "mineTotal": self.identity.map(|id| s.count_open_top_level(Scope::Mine(id))),
             "peopleCount": s.people.len(),
             "pending": self.completing.len() + self.archiving.len(),
             "nextDeadline": self.next_deadline(),
@@ -727,17 +729,18 @@ impl Controller {
     fn push_task(&self, out: &mut Vec<Row>, skey: &str, id: i64, cross_project: bool, first: bool) {
         let Some(t) = self.snap.task(id) else { return };
         let expanded = self.expanded.contains(&id) && !t.subtasks.is_empty();
-        Self::push(out, format!("t:{skey}:{id}"), self.task_json(t, 0, cross_project, expanded, first));
+        out.push(Row { key: format!("t:{skey}:{id}"), json: self.task_json(t, 0, cross_project, expanded, first) });
         if expanded {
             for sid in &t.subtasks {
                 if let Some(st) = self.snap.task(*sid) {
-                    Self::push(out, format!("t:{skey}:{id}:{sid}"), self.task_json(st, 1, false, false, false));
+                    out.push(Row { key: format!("t:{skey}:{id}:{sid}"), json: self.task_json(st, 1, false, false, false) });
                 }
             }
         }
     }
 
-    fn task_json(&self, t: &Task, depth: u8, cross_project: bool, expanded: bool, first: bool) -> Value {
+    fn task_json(&self, t: &Task, depth: u8, cross_project: bool, expanded: bool, first: bool) -> String {
+        use crate::core::json::{Obj, array};
         let s = &self.snap;
         let pending = self.completing.get(&t.id).copied();
         let done = t.completed() || pending.is_some();
@@ -751,43 +754,51 @@ impl Controller {
                     _ => "",
                 }
             };
-            json!({"text": dates::short(d, s.today), "tone": tone, "auto": t.due_on_auto_set})
+            Obj::with_capacity(64).str("text", &dates::short(d, s.today)).str("tone", tone).bool("auto", t.due_on_auto_set).finish()
         });
         let conflicts = s.date_conflicts(t);
         let conflict = (!conflicts.is_empty()).then(|| {
             let names: Vec<String> = conflicts.iter().map(|c| format!("\"{}\"", c.what)).collect();
             format!("Scheduled before {} {} done", names.join(", "), if names.len() == 1 { "is" } else { "are" })
         });
+        let refs = |ids: &[i64]| {
+            array(ids.iter().filter_map(|d| s.task(*d)).map(|d| Obj::with_capacity(96).int("id", d.id).str("what", &d.what).bool("done", d.completed()).finish()))
+        };
         let open_subtasks = t.subtasks.iter().filter(|id| s.task(**id).is_some_and(|st| !st.completed())).count();
-        let parent_done = t.parent_id.and_then(|p| s.task(p)).is_some_and(|p| p.completed());
-        json!({
-            "kind": "task",
-            "id": t.id,
-            "depth": depth,
-            "first": first,
-            "parentId": t.parent_id,
-            "what": t.what,
-            "done": done,
-            "completed": t.completed(),
-            "pendingUntil": pending,
-            "inProgress": t.in_progress && !done,
-            "link": t.link,
-            "project": if cross_project { Some(s.project_name(t.project_id)) } else { None },
-            "projectId": t.project_id,
-            "notes": notes_line(&t.notes),
-            "hasNotes": !t.notes.trim().is_empty(),
-            "needs": t.needs.iter().filter_map(|d| s.task(*d)).map(|d| json!({"id": d.id, "what": d.what, "done": d.completed()})).collect::<Vec<_>>(),
-            "enables": t.enables.iter().filter_map(|d| s.task(*d)).map(|d| json!({"id": d.id, "what": d.what, "done": d.completed()})).collect::<Vec<_>>(),
-            "people": t.people.iter().filter_map(|p| s.person(*p)).map(|p| json!({"id": p.id, "name": p.name, "initials": initials(&p.name)})).collect::<Vec<_>>(),
-            "due": due,
-            "conflict": conflict,
-            "blocked": if done { None } else { s.blocked_reason(t) },
-            "subtasks": t.subtasks.len(),
-            "openSubtasks": open_subtasks,
-            "expanded": expanded,
-            "siblings": t.parent_id.and_then(|p| s.task(p)).map(|p| p.subtasks.clone()),
-            "locked": parent_done,
-        })
+        let parent = t.parent_id.and_then(|p| s.task(p));
+        Obj::with_capacity(768)
+            .str("kind", "task")
+            .int("id", t.id)
+            .int("depth", depth as i64)
+            .bool("first", first)
+            .opt_int("parentId", t.parent_id)
+            .str("what", &t.what)
+            .bool("done", done)
+            .bool("completed", t.completed())
+            .opt_int("pendingUntil", pending.map(|p| p as i64))
+            .bool("inProgress", t.in_progress && !done)
+            .str("link", &t.link)
+            .opt_str("project", cross_project.then(|| s.project_name(t.project_id)))
+            .int("projectId", t.project_id)
+            .str("notes", &notes_line(&t.notes))
+            .bool("hasNotes", !t.notes.trim().is_empty())
+            .raw("needs", &refs(&t.needs))
+            .raw("enables", &refs(&t.enables))
+            .raw(
+                "people",
+                &array(t.people.iter().filter_map(|p| s.person(*p)).map(|p| {
+                    Obj::with_capacity(64).int("id", p.id).str("name", &p.name).str("initials", &initials(&p.name)).finish()
+                })),
+            )
+            .raw("due", due.as_deref().unwrap_or("null"))
+            .opt_str("conflict", conflict.as_deref())
+            .opt_str("blocked", if done { None } else { s.blocked_reason(t) })
+            .int("subtasks", t.subtasks.len() as i64)
+            .int("openSubtasks", open_subtasks as i64)
+            .bool("expanded", expanded)
+            .raw("siblings", &parent.map(|p| array(p.subtasks.iter().map(|i| i.to_string()))).unwrap_or_else(|| "null".into()))
+            .bool("locked", parent.is_some_and(|p| p.completed()))
+            .finish()
     }
 
     fn project_rows(&self, out: &mut Vec<Row>) {
