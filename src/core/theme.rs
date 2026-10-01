@@ -374,6 +374,8 @@ pub struct Tokens {
     pub scrim: Rgba,
     pub font_family: String,
     pub font_base: f64,
+    /// The shell's type scale (`Style.font.*`), px, with `[font]` overrides.
+    pub font_sizes: Vec<(&'static str, i64)>,
     pub spacing_scale: f64,
     pub radius: i64,
 }
@@ -453,6 +455,23 @@ pub fn tokens(name: String, p: &Palette, shell: &HashMap<String, String>, radius
         scrim: r.surface("menu", "scrim", bg, 0.5),
         font_family: if font_family.is_empty() { "monospace".into() } else { font_family.into() },
         font_base,
+        font_sizes: [
+            ("caption", "caption", 0.833),
+            ("bodySmall", "body-small", 0.917),
+            ("body", "body", 1.0),
+            ("subtitle", "subtitle", 1.083),
+            ("title", "title", 1.167),
+            ("heading", "heading", 1.333),
+            ("display", "display", 2.0),
+            ("displayLarge", "display-large", 2.333),
+            ("iconLarge", "icon-large", 1.5),
+        ]
+        .into_iter()
+        .map(|(name, key, mult)| {
+            let px = r.num(&format!("font.{key}"), 0.0);
+            (name, if px > 0.0 { px.round() as i64 } else { (font_base * mult).round().max(1.0) as i64 })
+        })
+        .collect(),
         spacing_scale: r.num("spacing.scale", 1.0).max(0.0) * if scale_with_font { (font_base / 12.0).max(1.0 / 12.0) } else { 1.0 },
         radius,
     }
@@ -522,6 +541,7 @@ impl Tokens {
         o.insert("dark".into(), self.dark.into());
         o.insert("fontFamily".into(), self.font_family.clone().into());
         o.insert("fontBase".into(), self.font_base.into());
+        o.insert("fonts".into(), self.font_sizes.iter().map(|(k, v)| ((*k).to_string(), serde_json::Value::from(*v))).collect::<serde_json::Map<_, _>>().into());
         o.insert("spacingScale".into(), self.spacing_scale.into());
         o.insert("radius".into(), self.radius.into());
         o.insert("borderWidth".into(), self.normal_border_width.max(1).into());
