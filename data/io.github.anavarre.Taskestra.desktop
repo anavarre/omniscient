@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Taskestra
+GenericName=Task Manager
+Comment=Tasks, projects and collaborators — native on Omarchy
+Exec=taskestra
+Icon=io.github.anavarre.Taskestra
+Terminal=false
+Categories=Office;ProjectManagement;
+Keywords=tasks;todo;projects;planning;
+StartupWMClass=io.github.anavarre.Taskestra
+StartupNotify=true
