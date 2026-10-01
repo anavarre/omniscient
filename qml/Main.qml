@@ -271,6 +271,11 @@ ApplicationWindow {
 
     // --------------------------------------------------------------- layout
 
+    // Everything visible lives in `stage`, so a theme switch can snapshot it.
+    Item {
+    id: stage
+    anchors.fill: parent
+
     FocusScope {
         id: keyRoot
         anchors.fill: parent
@@ -439,6 +444,7 @@ ApplicationWindow {
         z: 10
         // Modal.qml instances are created here and destroy themselves.
     }
+    } // stage
 
     function openModal(component, props) {
         const m = component.createObject(modals, props || {})
@@ -508,13 +514,27 @@ ApplicationWindow {
                 Omarchy.tokens = next
                 return
             }
-            win.contentItem.grabToImage(result => {
+            // Platforms that never deliver the grab (offscreen) just switch.
+            themeFallback.next = next
+            themeFallback.restart()
+            const asked = stage.grabToImage(result => {
+                if (!themeFallback.running)
+                    return
+                themeFallback.stop()
                 snapshot.source = result.url
                 snapshot.opacity = 1
                 Omarchy.tokens = next
                 dissolve.restart()
             })
+            if (!asked)
+                themeFallback.triggered()
         }
+    }
+    Timer {
+        id: themeFallback
+        property string next: ""
+        interval: 120
+        onTriggered: { stop(); Omarchy.tokens = next }
     }
     Image {
         id: snapshot

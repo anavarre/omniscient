@@ -29,6 +29,7 @@ FocusScope {
             return
         }
         selected = multi ? selected.concat([item]) : [item]
+        browsing = false
         field.text = ""
         list.close()
         changed()
@@ -41,8 +42,10 @@ FocusScope {
         return selected.map(s => s.id)
     }
 
+    // Suggestions open when you type, or on ↓ / Enter in an empty field.
+    property bool browsing: false
     readonly property var results: {
-        if (!field.activeFocus)
+        if (!field.activeFocus || (field.text === "" && !browsing))
             return []
         const taken = ids().concat(exclude)
         const hits = source(field.text).filter(r => taken.indexOf(r.id) < 0)
@@ -67,7 +70,7 @@ FocusScope {
         border.color: field.activeFocus ? Theme.focusBorderStrong : hover.hovered ? Theme.hoverBorderStrong : Theme.normalBorder
         Behavior on border.color { ColorAnimation { duration: Theme.quick } }
         HoverHandler { id: hover; cursorShape: Qt.IBeamCursor }
-        TapHandler { onTapped: field.forceActiveFocus() }
+        TapHandler { onTapped: { field.forceActiveFocus(); root.browsing = true } }
 
         Flow {
             id: flow
@@ -77,6 +80,7 @@ FocusScope {
             anchors.margins: Theme.sp(4)
             spacing: Theme.sp(4)
             Repeater {
+                id: chips
                 model: root.selected
                 Chip {
                     required property var modelData
@@ -95,14 +99,21 @@ FocusScope {
                 id: field
                 bare: true
                 focus: true
-                width: Math.max(Theme.sp(140), flow.width - (root.selected.length > 0 && !root.multi ? flow.width : 0) - Theme.sp(8))
-                visible: root.multi || root.selected.length === 0 || activeFocus
+                // Takes what's left of the chips' last line (or a new line).
+                readonly property Item lastChip: chips.count > 0 ? chips.itemAt(chips.count - 1) : null
+                readonly property real rest: lastChip ? flow.width - (lastChip.x + lastChip.width + flow.spacing) : flow.width
+                width: rest >= Theme.sp(40) ? rest : flow.width
+                onActiveFocusChanged: if (!activeFocus) root.browsing = false
                 placeholderText: root.selected.length === 0 ? root.placeholder : ""
                 topPadding: Theme.sp(4)
                 bottomPadding: Theme.sp(4)
                 Keys.onPressed: event => {
                     const n = root.results.length
-                    if (event.key === Qt.Key_Down && n > 0) {
+                    if ((event.key === Qt.Key_Down || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                            && !(event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier)) && !list.opened && field.text === "") {
+                        root.browsing = true
+                        event.accepted = true
+                    } else if (event.key === Qt.Key_Down && n > 0) {
                         suggestions.currentIndex = (suggestions.currentIndex + 1) % n
                         event.accepted = true
                     } else if (event.key === Qt.Key_Up && n > 0) {
@@ -117,6 +128,7 @@ FocusScope {
                         event.accepted = true
                     } else if (event.key === Qt.Key_Escape && list.opened) {
                         list.close()
+                        root.browsing = false
                         field.text = ""
                         event.accepted = true
                     }

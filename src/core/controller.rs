@@ -502,7 +502,9 @@ impl Controller {
                     "parentId": t.parent_id,
                     "parentWhat": t.parent_id.and_then(|p| s.task(p)).map(|p| p.what.clone()),
                     "due": t.due_on.map(dates::iso).unwrap_or_default(),
-                    "dueText": t.due_on.map(|d| dates::short(d, s.today)).unwrap_or_default(),
+                    // Always with the year: the editor re-parses this on save,
+                    // and a bare "Sep 29" means the *next* Sep 29.
+                    "dueText": t.due_on.map(dates::medium).unwrap_or_default(),
                     "link": t.link,
                     "notes": t.notes,
                     "completed": t.completed(),
@@ -821,6 +823,12 @@ impl Controller {
         self.page
     }
 
+    /// Identifies the page being shown: when it changes, the list is a new
+    /// document (replace it) rather than an edit (animate the difference).
+    pub fn view_key(&self) -> String {
+        format!("{:?}", self.page)
+    }
+
     pub fn task_project_of(&self, id: i64) -> Option<i64> {
         self.task_project(id)
     }
@@ -1034,6 +1042,17 @@ mod tests {
         let ops = crate::core::rows::diff(&before, &c.rows());
         assert_eq!(ops.len(), 1, "{ops:?}");
         assert!(matches!(ops[0], crate::core::rows::Op::Change { .. }));
+    }
+
+    #[test]
+    fn saving_the_editor_unchanged_keeps_past_and_future_dates() {
+        let (mut c, p) = setup();
+        for due in ["2026-09-29", "2026-10-01", "2027-03-05", "2020-01-01"] {
+            let id = task(&mut c, p, due, json!({"due": due}));
+            let t = c.query("task", &json!({"id": id})).unwrap();
+            ok(&mut c, "saveTask", json!({"id": id, "what": due, "projectId": p, "due": t["dueText"]}));
+            assert_eq!(c.snapshot().task(id).unwrap().due_on.map(dates::iso).as_deref(), Some(due), "shown as {}", t["dueText"]);
+        }
     }
 
     #[test]

@@ -33,6 +33,8 @@ Modal {
     }
 
     function save() {
+        if (closing)
+            return // Shift+Enter reaches both the field and the dialog
         const r = Store.tryAct("saveTask", {
             id: editing ? taskId : undefined,
             what: what.text,
@@ -144,25 +146,12 @@ Modal {
             Layout.fillWidth: true
             Layout.preferredWidth: 1
             spacing: Theme.sp(6)
-            FieldLabel { text: "WHEN?" }
-            Field {
-                id: when
-                Layout.fillWidth: true
-                placeholderText: "tom, fri, +3, oct 12…"
-                readonly property var parsed: Store.query("parseDate", { text: text })
-                invalid: !!parsed.invalid
-                onAccepted: root.save()
-            }
             RowLayout {
+                Layout.fillWidth: true
                 spacing: Theme.sp(4)
-                Txt {
-                    text: when.parsed.invalid ? "Not a date I understand" : when.parsed.text || "No date"
-                    color: when.parsed.invalid ? Theme.red : Theme.fgDim
-                    font.pixelSize: Theme.caption
-                    Layout.fillWidth: true
-                }
+                FieldLabel { text: "WHEN?"; Layout.fillWidth: true }
                 Repeater {
-                    model: [["Today", "today"], ["Tom", "tom"], ["Mon", "next week"], ["Clear", ""]]
+                    model: [["Today", "today"], ["Tomorrow", "tom"], ["Next week", "next week"], ["None", ""]]
                     Chip {
                         required property var modelData
                         text: modelData[0]
@@ -170,6 +159,20 @@ Modal {
                         onClicked: when.text = modelData[1]
                     }
                 }
+            }
+            Field {
+                id: when
+                Layout.fillWidth: true
+                placeholderText: "tom, fri, +3, 2w, oct 12…"
+                readonly property var parsed: Store.query("parseDate", { text: text })
+                invalid: !!parsed.invalid
+                onAccepted: root.save()
+            }
+            Txt {
+                text: when.parsed.invalid ? "Not a date I understand" : when.parsed.text || "No date"
+                color: when.parsed.invalid ? Theme.red : Theme.fgDim
+                font.pixelSize: Theme.caption
+                Layout.fillWidth: true
             }
         }
         ColumnLayout {
@@ -248,7 +251,7 @@ Modal {
         Layout.fillWidth: true
         spacing: Theme.sp(6)
         FieldLabel { text: "NOTES" }
-        NotesArea { id: notes; Layout.fillWidth: true }
+        NotesArea { id: notes; Layout.fillWidth: true; onSubmit: root.save() }
     }
 
     footer: [

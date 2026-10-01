@@ -176,6 +176,7 @@ pub struct AppRust {
     gallery: bool,
     ctl: Option<Controller>,
     items: Vec<Item>,
+    view: String,
 }
 
 fn timing() -> bool {
@@ -271,9 +272,16 @@ impl qobject::App {
         let Some(ctl) = self.ctl.as_ref() else { return };
         let new_rows = ctl.rows();
         let state = QString::from(ctl.state().to_string().as_str());
-        let old: Vec<Row> = self.items.iter().map(|i| i.row.clone()).collect();
+        let view = ctl.view_key();
+        let ops = if view != self.view {
+            vec![Op::Reset { rows: new_rows }]
+        } else {
+            let old: Vec<Row> = self.items.iter().map(|i| i.row.clone()).collect();
+            diff(&old, &new_rows)
+        };
+        self.as_mut().rust_mut().view = view;
         let root = QModelIndex::default();
-        for op in diff(&old, &new_rows) {
+        for op in ops {
             match op {
                 Op::Remove { at, count } => unsafe {
                     self.as_mut().begin_remove_rows(&root, at as i32, (at + count - 1) as i32);

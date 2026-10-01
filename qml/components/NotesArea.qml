@@ -9,6 +9,9 @@ ColumnLayout {
     property alias text: area.text
     property bool preview: false
     property alias area: area
+    // Shift/Ctrl+Enter inside the notes saves the dialog (the text area
+    // would otherwise take it as a newline).
+    signal submit()
     spacing: Theme.sp(4)
 
     Rectangle {
@@ -40,6 +43,10 @@ ColumnLayout {
                 Keys.onPressed: event => {
                     if (event.key === Qt.Key_E && (event.modifiers & Qt.ControlModifier)) {
                         root.preview = true
+                        event.accepted = true
+                    } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                               && (event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier))) {
+                        root.submit()
                         event.accepted = true
                     }
                 }

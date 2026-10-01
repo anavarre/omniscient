@@ -14,6 +14,8 @@ Modal {
     initialFocus: yesButton
 
     function yes() {
+        if (closing)
+            return
         if (onYes)
             onYes()
         close()

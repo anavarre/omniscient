@@ -26,6 +26,8 @@ Modal {
     }
 
     function save() {
+        if (closing)
+            return // Shift+Enter reaches both the field and the dialog
         const r = Store.tryAct("saveProject", { id: editing ? projectId : undefined, name: name.text, link: link.text, notes: notes.text })
         if (r.error !== undefined) {
             errors = r.error
@@ -66,7 +68,7 @@ Modal {
         Layout.fillWidth: true
         spacing: Theme.sp(6)
         Txt { text: "NOTES"; color: Theme.fgDim; font.pixelSize: Theme.caption; font.bold: true; font.letterSpacing: 1 }
-        NotesArea { id: notes; Layout.fillWidth: true }
+        NotesArea { id: notes; Layout.fillWidth: true; onSubmit: root.save() }
     }
 
     footer: [
