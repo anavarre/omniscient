@@ -89,7 +89,9 @@ fn main() {
     let replay = std::env::var("OMNISCIENT_DEBUG_KEYS").unwrap_or_default();
     let screenshot = std::env::var("OMNISCIENT_SCREENSHOT").unwrap_or_default();
     let replay = if replay.is_empty() && !screenshot.is_empty() { "wait wait wait".to_string() } else { replay };
-    let _ = bridge::app::LAUNCH.set(bridge::app::Launch { db_path, replay, screenshot, gallery });
+    // OMNISCIENT_GEOMETRY=WxH sizes the window (layout checks).
+    let geometry = std::env::var("OMNISCIENT_GEOMETRY").unwrap_or_default();
+    let _ = bridge::app::LAUNCH.set(bridge::app::Launch { db_path, replay, screenshot, geometry, gallery });
 
     let mut app = QGuiApplication::new();
     QGuiApplication::set_desktop_file_name(&QString::from(APP_ID));

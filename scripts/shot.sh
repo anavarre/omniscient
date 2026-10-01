@@ -1,10 +1,10 @@
 #!/bin/bash
 # Screenshot the app off-screen after replaying keys:
-#   scripts/shot.sh out.png "j j Return" [omarchy-theme-name]
+#   scripts/shot.sh out.png "j j Return" [omarchy-theme-name] [WxH]
 # Uses a throwaway database seeded from tests/rails_fixture.sql.
 set -eu
 cd "$(dirname "$0")/.."
-OUT=$1; KEYS=${2:-wait}; THEME=${3:-}
+OUT=$1; KEYS=${2:-wait}; THEME=${3:-}; export OMNISCIENT_GEOMETRY=${4:-}
 BIN=${BIN:-target/debug/omniscient}
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 sqlite3 "$TMP/rails.sqlite3" < tests/rails_fixture.sql

@@ -52,7 +52,7 @@ ApplicationWindow {
         { group: "Navigate", keys: ["G", "End"], label: "Bottom", run: () => jump(true) },
         { group: "Navigate", keys: ["Enter"], label: "Open selected", run: () => activateSelected() },
         { group: "Navigate", keys: ["Esc"], label: "Close dialog / back to projects", run: () => back() },
-        { group: "Navigate", keys: ["b"], label: "Toggle sidebar", run: () => win.sidebarOpen = !win.sidebarOpen },
+        { group: "Navigate", keys: ["b"], label: "Toggle sidebar", run: () => win.narrow ? drawer.open() : win.sidebarOpen = !win.sidebarOpen },
         { group: "Tasks", keys: ["t", "Ctrl+N"], label: "New task", run: () => Store.newTask({}) },
         { group: "Tasks", keys: ["x"], label: "Complete / undo selected", run: () => onSelected("task", d => Store.act("toggle", { id: d.id })) },
         { group: "Tasks", keys: ["i"], label: "Mark in progress", run: () => onSelected("task", d => Store.act("progress", { id: d.id })) },
@@ -231,7 +231,7 @@ ApplicationWindow {
         if (!done) {
             dragGhost.taskId = d.id
             dragGhost.label = d.what
-            dragGhost.y = list.y + p.y - dragGhost.height / 2
+            dragGhost.y = listArea.y + p.y - dragGhost.height / 2
             return
         }
         dragGhost.taskId = -1
@@ -296,11 +296,18 @@ ApplicationWindow {
                 Behavior on Layout.preferredWidth { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
             }
 
-            ListView {
-                id: list
+            Item {
+                id: listArea
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
+
+            ListView {
+                id: list
+                anchors.fill: parent
+                anchors.leftMargin: gutter
+                anchors.rightMargin: gutter
+                clip: false
                 model: App
                 currentIndex: -1
                 reuseItems: true
@@ -311,8 +318,6 @@ ApplicationWindow {
                 highlightFollowsCurrentItem: false
                 keyNavigationEnabled: false
                 readonly property int gutter: Theme.sp(win.narrow ? 14 : win.compact ? 22 : 34)
-                leftMargin: gutter
-                rightMargin: gutter
                 bottomMargin: Theme.sp(48)
                 topMargin: Theme.sp(24)
 
@@ -337,8 +342,9 @@ ApplicationWindow {
                 NumberAnimation { id: scroll; target: list; property: "contentY"; duration: 140; easing.type: Easing.OutCubic }
 
                 header: PageHeader {
-                    width: list.width - list.leftMargin - list.rightMargin
+                    width: list.width
                     narrow: win.narrow
+                    onMenu: drawer.open()
                 }
 
                 delegate: DelegateChooser {
@@ -348,7 +354,7 @@ ApplicationWindow {
                         TaskRow {
                             required property string row
                             d: JSON.parse(row)
-                            width: list.width - list.leftMargin - list.rightMargin
+                            width: list.width
                             isCurrent: ListView.isCurrentItem
                             narrow: win.narrow
                             compact: win.compact
@@ -361,7 +367,7 @@ ApplicationWindow {
                         SectionRow {
                             required property string row
                             d: JSON.parse(row)
-                            width: list.width - list.leftMargin - list.rightMargin
+                            width: list.width
                         }
                     }
                     DelegateChoice {
@@ -369,7 +375,7 @@ ApplicationWindow {
                         ProjectRow {
                             required property string row
                             d: JSON.parse(row)
-                            width: list.width - list.leftMargin - list.rightMargin
+                            width: list.width
                             isCurrent: ListView.isCurrentItem
                             onSelect: list.currentIndex = index
                         }
@@ -379,7 +385,7 @@ ApplicationWindow {
                             required property string row
                             required property int index
                             d: JSON.parse(row)
-                            width: list.width - list.leftMargin - list.rightMargin
+                            width: list.width
                             isCurrent: ListView.isCurrentItem
                             onSelect: list.currentIndex = index
                         }
@@ -403,6 +409,10 @@ ApplicationWindow {
 
                 ScrollBar.vertical: ScrollBar {
                     id: vbar
+                    parent: listArea
+                    y: 0
+                    height: listArea.height
+                    x: listArea.width - (list.gutter + width) / 2
                     policy: ScrollBar.AsNeeded
                     contentItem: Rectangle {
                         implicitWidth: Theme.sp(4)
@@ -414,6 +424,7 @@ ApplicationWindow {
                     background: null
                 }
             }
+            } // listArea
         }
 
         // Sub-task drag: a ghost follows the pointer; dropping reorders.
@@ -423,8 +434,8 @@ ApplicationWindow {
             property int fromIndex: -1
             property string label: ""
             visible: taskId >= 0
-            x: list.x + list.leftMargin + Theme.sp(30)
-            width: list.width - list.leftMargin - list.rightMargin - Theme.sp(30)
+            x: listArea.x + list.x + Theme.sp(30)
+            width: list.width - Theme.sp(30)
             height: ghostText.implicitHeight + Theme.sp(14)
             radius: Theme.radius
             color: Theme.popupBg
@@ -434,6 +445,27 @@ ApplicationWindow {
             z: 50
             Txt { id: ghostText; anchors.verticalCenter: parent.verticalCenter; x: Theme.sp(12); text: Icons.drag + "  " + dragGhost.label }
         }
+    }
+
+    // Narrow windows (a third of a screen, tiled) slide the sidebar in.
+    Drawer {
+        id: drawer
+        edge: Qt.LeftEdge
+        width: Math.min(Theme.sp(260), win.width * 0.8)
+        height: win.height
+        interactive: win.narrow
+        modal: true
+        background: Rectangle { color: Theme.bgDark }
+        Overlay.modal: Rectangle { color: Theme.scrim }
+        Sidebar { anchors.fill: parent }
+        Connections {
+            target: Store
+            function onPageChanged() { drawer.close() }
+        }
+    }
+    Connections {
+        target: win
+        function onNarrowChanged() { if (!win.narrow) drawer.close() }
     }
 
     // ------------------------------------------------------------- overlays
@@ -586,6 +618,11 @@ ApplicationWindow {
         }
     }
     Component.onCompleted: {
+        const g = App.geometry.split("x").map(Number)
+        if (g.length === 2 && g[0] > 0 && g[1] > 0) {
+            width = g[0]
+            height = g[1]
+        }
         requestActivate()
         if (App.replay !== "") {
             replayTokens = App.replay.trim().split(/\s+/)

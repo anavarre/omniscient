@@ -9,6 +9,7 @@ ColumnLayout {
     readonly property var s: Store.s
     readonly property var project: s.project || null
     property bool narrow: false
+    signal menu()
     spacing: Theme.sp(10)
 
     readonly property var groupLabels: ({ date: "Date", project: "Project", person: "Collaborator" })
@@ -17,6 +18,12 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         spacing: Theme.sp(12)
+        Btn {
+            visible: root.narrow
+            kind: "icon"
+            glyph: Icons.list
+            onClicked: root.menu()
+        }
         Btn {
             visible: Store.page === "project"
             kind: "icon"
@@ -57,14 +64,14 @@ ColumnLayout {
         }
         Btn {
             visible: Store.page === "project"
-            text: "Edit"
+            text: root.narrow ? "" : "Edit"
             glyph: Icons.edit
             hint: "e"
             onClicked: Store.openProject(root.s.projectId)
         }
         Btn {
             visible: Store.page === "projects"
-            text: "New project"
+            text: root.narrow ? "" : "New project"
             glyph: Icons.plus
             hint: "P"
             onClicked: Store.newProject()
@@ -72,7 +79,7 @@ ColumnLayout {
         Btn {
             visible: Store.page !== "projects" && !(root.project && root.project.archived)
             kind: "primary"
-            text: "New task"
+            text: root.narrow ? "" : "New task"
             glyph: Icons.plus
             hint: "t"
             onClicked: Store.newTask({})

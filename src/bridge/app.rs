@@ -39,6 +39,7 @@ pub mod qobject {
         #[qproperty(QString, state)]
         #[qproperty(QString, replay)]
         #[qproperty(QString, screenshot)]
+        #[qproperty(QString, geometry)]
         #[qproperty(bool, gallery)]
         type App = super::AppRust;
     }
@@ -145,6 +146,7 @@ pub struct Launch {
     pub db_path: std::path::PathBuf,
     pub replay: String,
     pub screenshot: String,
+    pub geometry: String,
     pub gallery: bool,
 }
 
@@ -173,6 +175,7 @@ pub struct AppRust {
     state: QString,
     replay: QString,
     screenshot: QString,
+    geometry: QString,
     gallery: bool,
     ctl: Option<Controller>,
     items: Vec<Item>,
@@ -190,6 +193,7 @@ impl cxx_qt::Initialize for qobject::App {
         if let Some(l) = launch {
             self.as_mut().set_replay(QString::from(l.replay.as_str()));
             self.as_mut().set_screenshot(QString::from(l.screenshot.as_str()));
+            self.as_mut().set_geometry(QString::from(l.geometry.as_str()));
             self.as_mut().set_gallery(l.gallery);
         }
         let path = launch.map(|l| l.db_path.clone()).unwrap_or_else(crate::core::db::default_path);

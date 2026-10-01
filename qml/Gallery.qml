@@ -64,7 +64,7 @@ Rectangle {
                 Picker { Layout.preferredWidth: Theme.sp(320); placeholder: "Picker"; selected: [{ id: 1, name: "Ann" }, { id: 2, name: "Bob" }] }
             }
             NotesArea { Layout.preferredWidth: Theme.sp(520); text: "**Bold**, *italic* and a [link](https://omarchy.org)\n\n- one\n- two" }
-            Toast { Component.onCompleted: show("Saved. This is a toast.", false) }
+            Toast { Layout.topMargin: Theme.sp(10); Component.onCompleted: show("Saved. This is a toast.", false) }
         }
     }
 }
