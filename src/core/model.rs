@@ -139,12 +139,7 @@ impl Snapshot {
 
     /// Why a task can't be completed yet, in the web app's words.
     pub fn blocked_reason(&self, task: &Task) -> Option<&'static str> {
-        match (self.open_needs(task), self.open_subtasks(task)) {
-            (true, true) => Some("Complete all sub-tasks and dependencies first!"),
-            (true, false) => Some("All dependencies must be completed first!"),
-            (false, true) => Some("Complete all sub-tasks first!"),
-            (false, false) => None,
-        }
+        blocked_message((self.open_needs(task), self.open_subtasks(task)))
     }
 
     /// Incomplete dependencies due on or after this task — it is scheduled
@@ -299,6 +294,16 @@ impl Snapshot {
             ))
         });
         hits.into_iter().take(20).map(|t| t.id).collect()
+    }
+}
+
+/// The web app's wording for (open dependencies, open sub-tasks).
+pub fn blocked_message((needs, subtasks): (bool, bool)) -> Option<&'static str> {
+    match (needs, subtasks) {
+        (true, true) => Some("Complete all sub-tasks and dependencies first!"),
+        (true, false) => Some("All dependencies must be completed first!"),
+        (false, true) => Some("Complete all sub-tasks first!"),
+        (false, false) => None,
     }
 }
 

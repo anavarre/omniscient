@@ -61,16 +61,15 @@ fn offset(today: NaiveDate, n: i64, unit: &str) -> Option<NaiveDate> {
     match unit {
         "" | "d" | "day" | "days" => Some(today + Duration::days(n)),
         "w" | "wk" | "wks" | "week" | "weeks" => Some(today + Duration::weeks(n)),
-        "m" | "mo" | "month" | "months" => {
-            if n >= 0 {
-                today.checked_add_months(Months::new(n as u32))
-            } else {
-                today.checked_sub_months(Months::new((-n) as u32))
-            }
-        }
-        "y" | "year" | "years" => today.checked_add_months(Months::new((n * 12) as u32)),
+        "m" | "mo" | "month" | "months" => add_months(today, n),
+        "y" | "yr" | "year" | "years" => add_months(today, n.checked_mul(12)?),
         _ => None,
     }
+}
+
+fn add_months(d: NaiveDate, n: i64) -> Option<NaiveDate> {
+    let months = Months::new(u32::try_from(n.unsigned_abs()).ok()?);
+    if n >= 0 { d.checked_add_months(months) } else { d.checked_sub_months(months) }
 }
 
 /// Splits "12oct" / "3d" / "+2w" into number and unit.
@@ -271,6 +270,9 @@ mod tests {
         assert_eq!(parse("in 5 days", t()), Some(d(2026, 10, 6)));
         assert_eq!(parse("in 2w", t()), Some(d(2026, 10, 15)));
         assert_eq!(parse("10 days", t()), Some(d(2026, 10, 11)));
+        assert_eq!(parse("1y", t()), Some(d(2027, 10, 1)));
+        assert_eq!(parse("-1y", t()), Some(d(2025, 10, 1)), "negative years go back");
+        assert_eq!(parse("-2m", t()), Some(d(2026, 8, 1)));
     }
 
     #[test]

@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use chrono::NaiveDate;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::dates;
-use crate::model::{Person, Project, Snapshot, Task};
+use crate::core::dates;
+use crate::core::model::{Person, Project, Snapshot, Task};
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -16,7 +16,9 @@ fn err(e: rusqlite::Error) -> String {
     e.to_string()
 }
 
-const SCHEMA: &str = "
+/// Schema history, applied in order against `PRAGMA user_version`. Never
+/// edit a shipped entry; append a new one.
+const MIGRATIONS: &[&str] = &["
 CREATE TABLE IF NOT EXISTS people (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -66,7 +68,7 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-";
+"];
 
 #[derive(Clone, Debug, Default)]
 pub struct TaskInput {
@@ -112,7 +114,7 @@ pub fn default_path() -> PathBuf {
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"));
-    base.join("taskestra").join("taskestra.sqlite3")
+    base.join("omniscient").join("omniscient.sqlite3")
 }
 
 fn valid_link(link: &str) -> bool {
@@ -137,7 +139,6 @@ impl Db {
         Self::init(conn)
     }
 
-    #[cfg(test)]
     pub fn memory() -> Result<Db> {
         Self::init(Connection::open_in_memory().map_err(err)?)
     }
@@ -145,8 +146,24 @@ impl Db {
     fn init(conn: Connection) -> Result<Db> {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
             .map_err(err)?;
-        conn.execute_batch(SCHEMA).map_err(err)?;
-        Ok(Db { conn })
+        let db = Db { conn };
+        db.migrate()?;
+        Ok(db)
+    }
+
+    fn migrate(&self) -> Result<()> {
+        let version: i64 = self.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(err)?;
+        let version = usize::try_from(version).unwrap_or(0);
+        if version > MIGRATIONS.len() {
+            return Err(format!("This database was written by a newer Omniscient (schema {version})."));
+        }
+        for (i, sql) in MIGRATIONS.iter().enumerate().skip(version) {
+            let tx = self.conn.unchecked_transaction().map_err(err)?;
+            tx.execute_batch(sql).map_err(err)?;
+            tx.pragma_update(None, "user_version", (i + 1) as i64).map_err(err)?;
+            tx.commit().map_err(err)?;
+        }
+        Ok(())
     }
 
     // ------------------------------------------------------------ reading
@@ -550,17 +567,34 @@ impl Db {
         self.conn.execute("DELETE FROM tasks WHERE id = ?1", [id]).map(|_| ()).map_err(err)
     }
 
+    fn open_children(&self, id: i64) -> Result<(bool, bool)> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM task_dependencies d JOIN tasks t ON t.id = d.depends_on_task_id
+                                WHERE d.task_id = ?1 AND t.completed_at IS NULL),
+                        EXISTS (SELECT 1 FROM tasks WHERE parent_task_id = ?1 AND completed_at IS NULL)",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(err)
+    }
+
     pub fn complete_task(&self, id: i64) -> Result<()> {
-        let snap = self.snapshot()?;
-        let task = snap.task(id).ok_or("Task not found")?;
-        if task.completed() {
+        let (completed, due): (bool, Option<String>) = self
+            .conn
+            .query_row("SELECT completed_at IS NOT NULL, due_on FROM tasks WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .map_err(err)?
+            .ok_or("Task not found")?;
+        if completed {
             return Ok(());
         }
-        if let Some(reason) = snap.blocked_reason(task) {
+        if let Some(reason) = crate::core::model::blocked_message(self.open_children(id)?) {
             return Err(reason.into());
         }
-        let auto = task.due_on.is_none();
-        let due = task.due_on.unwrap_or(snap.today);
+        let due = due.as_deref().and_then(dates::from_iso);
+        let auto = due.is_none();
+        let due = due.unwrap_or_else(dates::today);
         self.conn
             .execute(
                 "UPDATE tasks SET completed_at = ?1, due_on = ?2, due_on_auto_set = ?3, updated_at = ?1 WHERE id = ?4",
@@ -594,21 +628,17 @@ impl Db {
     /// After a task completes, undated dependents with no remaining open
     /// dependencies get today's date so they surface without searching.
     pub fn auto_date_unblocked_dependents(&self, id: i64) -> Result<usize> {
-        let snap = self.snapshot()?;
-        let Some(task) = snap.task(id) else { return Ok(0) };
-        if !task.completed() {
-            return Ok(0);
-        }
-        let mut n = 0;
-        for dep in task.enables.iter().filter_map(|d| snap.task(*d)) {
-            if !dep.completed() && dep.due_on.is_none() && !snap.open_needs(dep) {
-                self.conn
-                    .execute("UPDATE tasks SET due_on = ?1, due_on_auto_set = 1 WHERE id = ?2", params![dates::iso(snap.today), dep.id])
-                    .map_err(err)?;
-                n += 1;
-            }
-        }
-        Ok(n)
+        self.conn
+            .execute(
+                "UPDATE tasks SET due_on = ?2, due_on_auto_set = 1
+                 WHERE id IN (SELECT task_id FROM task_dependencies WHERE depends_on_task_id = ?1)
+                   AND EXISTS (SELECT 1 FROM tasks WHERE id = ?1 AND completed_at IS NOT NULL)
+                   AND completed_at IS NULL AND due_on IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM task_dependencies d JOIN tasks b ON b.id = d.depends_on_task_id
+                                   WHERE d.task_id = tasks.id AND b.completed_at IS NULL)",
+                params![id, dates::iso(dates::today())],
+            )
+            .map_err(err)
     }
 
     pub fn reorder(&self, ids: &[i64]) -> Result<()> {
@@ -630,61 +660,105 @@ impl Db {
     }
 
     /// Copies a Taskestra (Rails) database in, keeping ids. ActionText notes
-    /// become plain text.
+    /// become Markdown. Rows that can't be carried over (blank names, tasks
+    /// whose project is gone) are skipped and reported; names that differ
+    /// only by case are merged into the first one.
     pub fn import_rails(&self, path: &Path) -> Result<String> {
         if !self.is_empty() {
-            return Err("The Taskestra database already has data; import only works into an empty one.".into());
+            return Err("The database already has data; import only works into an empty one.".into());
         }
         if !path.exists() {
             return Err(format!("{} does not exist", path.display()));
         }
         let src = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(err)?;
+        let has_rich_text: bool = src
+            .query_row("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'action_text_rich_texts')", [], |r| r.get(0))
+            .map_err(err)?;
         let notes = |record_type: &str| -> Result<HashMap<i64, String>> {
+            let mut out = HashMap::new();
+            if !has_rich_text {
+                return Ok(out);
+            }
             let mut stmt = src
                 .prepare("SELECT record_id, body FROM action_text_rich_texts WHERE record_type = ?1 AND name = 'notes'")
                 .map_err(err)?;
             let rows = stmt
                 .query_map([record_type], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default())))
                 .map_err(err)?;
-            let mut out = HashMap::new();
             for row in rows {
                 let (id, body) = row.map_err(err)?;
-                out.insert(id, html_to_text(&body));
+                out.insert(id, html_to_markdown(&body));
             }
             Ok(out)
         };
         let project_notes = notes("Project")?;
         let task_notes = notes("Task")?;
         let now = dates::now_stamp();
+        let mut skipped: Vec<String> = vec![];
 
         let tx = self.conn.unchecked_transaction().map_err(err)?;
-        let mut counts = (0, 0, 0);
+        // Source id → id kept here (differs only for merged duplicates).
+        let mut people: HashMap<i64, i64> = HashMap::new();
+        let mut projects: HashMap<i64, i64> = HashMap::new();
+        let mut tasks: HashMap<i64, ()> = HashMap::new();
         {
-            let mut stmt = src.prepare("SELECT id, name, created_at FROM people").map_err(err)?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))).map_err(err)?;
+            let mut by_name: HashMap<String, i64> = HashMap::new();
+            let mut stmt = src.prepare("SELECT id, name, created_at FROM people ORDER BY id").map_err(err)?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?)))
+                .map_err(err)?;
             for row in rows {
                 let (id, name, created) = row.map_err(err)?;
+                let name = name.unwrap_or_default().trim().to_string();
+                if name.is_empty() {
+                    skipped.push(format!("person #{id} (no name)"));
+                    continue;
+                }
+                if let Some(&first) = by_name.get(&name.to_lowercase()) {
+                    people.insert(id, first);
+                    continue;
+                }
                 let created = created.unwrap_or_else(|| now.clone());
-                tx.execute("INSERT INTO people (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)", params![id, name.trim(), created])
+                tx.execute("INSERT INTO people (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)", params![id, name, created])
                     .map_err(err)?;
-                counts.0 += 1;
+                by_name.insert(name.to_lowercase(), id);
+                people.insert(id, id);
             }
-            let mut stmt = src.prepare("SELECT id, name, link, archived_at, created_at FROM projects").map_err(err)?;
+
+            let mut by_name: HashMap<String, i64> = HashMap::new();
+            let mut stmt = src.prepare("SELECT id, name, link, archived_at, created_at FROM projects ORDER BY id").map_err(err)?;
             let rows = stmt
                 .query_map([], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<String>>(4)?))
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                    ))
                 })
                 .map_err(err)?;
             for row in rows {
                 let (id, name, link, archived, created) = row.map_err(err)?;
+                let name = name.unwrap_or_default().trim().to_string();
+                if name.is_empty() {
+                    skipped.push(format!("project #{id} (no name)"));
+                    continue;
+                }
+                if let Some(&first) = by_name.get(&name.to_lowercase()) {
+                    projects.insert(id, first);
+                    continue;
+                }
                 let created = created.unwrap_or_else(|| now.clone());
                 tx.execute(
                     "INSERT INTO projects (id, name, link, notes, archived_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-                    params![id, name.trim(), link.unwrap_or_default(), project_notes.get(&id).cloned().unwrap_or_default(), archived, created],
+                    params![id, name, link.unwrap_or_default().trim(), project_notes.get(&id).cloned().unwrap_or_default(), archived, created],
                 )
                 .map_err(err)?;
-                counts.1 += 1;
+                by_name.insert(name.to_lowercase(), id);
+                projects.insert(id, id);
             }
+
             // Parents before children so the self-reference holds.
             let mut stmt = src
                 .prepare(
@@ -696,7 +770,7 @@ impl Db {
                 .query_map([], |r| {
                     Ok((
                         r.get::<_, i64>(0)?,
-                        r.get::<_, i64>(1)?,
+                        r.get::<_, Option<i64>>(1)?,
                         r.get::<_, Option<i64>>(2)?,
                         r.get::<_, Option<String>>(3)?,
                         r.get::<_, Option<String>>(4)?,
@@ -711,6 +785,19 @@ impl Db {
                 .map_err(err)?;
             for row in rows {
                 let (id, project, parent, what, due, auto, link, completed, progress, position, created) = row.map_err(err)?;
+                let Some(&project) = project.and_then(|p| projects.get(&p)) else {
+                    skipped.push(format!("task #{id} (its project is missing)"));
+                    continue;
+                };
+                if parent.is_some_and(|p| !tasks.contains_key(&p)) {
+                    skipped.push(format!("task #{id} (its parent task is missing)"));
+                    continue;
+                }
+                let what = what.unwrap_or_default().trim().to_string();
+                if what.is_empty() {
+                    skipped.push(format!("task #{id} (no title)"));
+                    continue;
+                }
                 let created = created.unwrap_or_else(|| now.clone());
                 tx.execute(
                     "INSERT INTO tasks (id, project_id, parent_task_id, what, due_on, due_on_auto_set, link, notes, completed_at,
@@ -720,10 +807,10 @@ impl Db {
                         id,
                         project,
                         parent,
-                        what.unwrap_or_default().trim(),
+                        what,
                         due.as_deref().and_then(dates::from_iso).map(dates::iso),
                         auto.unwrap_or(false),
-                        link.unwrap_or_default(),
+                        link.unwrap_or_default().trim(),
                         task_notes.get(&id).cloned().unwrap_or_default(),
                         completed,
                         progress,
@@ -732,25 +819,67 @@ impl Db {
                     ],
                 )
                 .map_err(err)?;
-                counts.2 += 1;
+                tasks.insert(id, ());
             }
-            for (table, cols) in [("task_assignments", "task_id, person_id"), ("task_dependencies", "task_id, depends_on_task_id")] {
-                let mut stmt = src.prepare(&format!("SELECT {cols} FROM {table}")).map_err(err)?;
-                let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).map_err(err)?;
-                for row in rows {
-                    let (a, b) = row.map_err(err)?;
-                    tx.execute(&format!("INSERT OR IGNORE INTO {table} ({cols}) VALUES (?1, ?2)"), params![a, b]).map_err(err)?;
+            // A sub-task lives in its parent's project.
+            tx.execute(
+                "UPDATE tasks SET project_id = (SELECT p.project_id FROM tasks p WHERE p.id = tasks.parent_task_id)
+                 WHERE parent_task_id IS NOT NULL",
+                [],
+            )
+            .map_err(err)?;
+
+            let mut stmt = src.prepare("SELECT task_id, person_id FROM task_assignments").map_err(err)?;
+            for row in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).map_err(err)? {
+                let (task, person) = row.map_err(err)?;
+                if let (true, Some(person)) = (tasks.contains_key(&task), people.get(&person)) {
+                    tx.execute("INSERT OR IGNORE INTO task_assignments (task_id, person_id) VALUES (?1, ?2)", params![task, person])
+                        .map_err(err)?;
+                }
+            }
+            let mut stmt = src.prepare("SELECT task_id, depends_on_task_id FROM task_dependencies").map_err(err)?;
+            for row in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).map_err(err)? {
+                let (task, dep) = row.map_err(err)?;
+                if task != dep && tasks.contains_key(&task) && tasks.contains_key(&dep) {
+                    tx.execute("INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id) VALUES (?1, ?2)", params![task, dep])
+                        .map_err(err)?;
                 }
             }
         }
         tx.commit().map_err(err)?;
-        Ok(format!("Imported {} people, {} projects and {} tasks.", counts.0, counts.1, counts.2))
+        let distinct = |m: &HashMap<i64, i64>| m.iter().filter(|(k, v)| k == v).count();
+        let mut summary =
+            format!("Imported {} people, {} projects and {} tasks.", distinct(&people), distinct(&projects), tasks.len());
+        if !skipped.is_empty() {
+            summary.push_str(&format!("\nSkipped {}: {}", skipped.len(), skipped.join(", ")));
+        }
+        Ok(summary)
     }
 }
 
-/// ActionText HTML → readable plain text (lists become bullets).
-pub fn html_to_text(html: &str) -> String {
+/// ActionText/Lexxy HTML → Markdown: emphasis, links, lists, headings,
+/// quotes and code survive; attachments become their caption.
+pub fn html_to_markdown(html: &str) -> String {
     let mut out = String::new();
+    // Open lists: Some(n) numbered, None bulleted.
+    let mut lists: Vec<Option<usize>> = vec![];
+    let mut links: Vec<String> = vec![];
+    let mut pre = false;
+    let newline = |out: &mut String| {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+    };
+    let blank_line = |out: &mut String| {
+        if !out.is_empty() {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            if !out.ends_with("\n\n") {
+                out.push('\n');
+            }
+        }
+    };
     let mut chars = html.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '<' {
@@ -761,20 +890,80 @@ pub fn html_to_text(html: &str) -> String {
                 }
                 tag.push(t);
             }
-            let name: String = tag.trim_start_matches('/').chars().take_while(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
             let closing = tag.starts_with('/');
+            let name: String =
+                tag.trim_start_matches('/').chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>().to_lowercase();
+            let attr = |key: &str| -> Option<String> {
+                let at = tag.find(&format!("{key}=\""))? + key.len() + 2;
+                Some(tag[at..].split('"').next()?.to_string())
+            };
             match (name.as_str(), closing) {
                 ("br", _) => out.push('\n'),
-                ("li", false) => {
-                    if !out.is_empty() && !out.ends_with('\n') {
-                        out.push('\n');
-                    }
-                    out.push_str("• ");
+                ("strong" | "b", _) => out.push_str("**"),
+                ("em" | "i", _) => out.push('*'),
+                ("s" | "del" | "strike", _) => out.push_str("~~"),
+                ("code", _) if !pre => out.push('`'),
+                ("a", false) => {
+                    links.push(attr("href").unwrap_or_default());
+                    out.push('[');
                 }
-                ("p" | "div" | "h1" | "h2" | "h3" | "h4" | "blockquote" | "pre" | "ul" | "ol" | "li", true)
-                    if !out.ends_with('\n') => {
-                        out.push('\n');
+                ("a", true) => {
+                    let href = links.pop().unwrap_or_default();
+                    out.push_str(&format!("]({href})"));
+                }
+                ("ul", false) => {
+                    if lists.is_empty() { blank_line(&mut out) } else { newline(&mut out) }
+                    lists.push(None);
+                }
+                ("ol", false) => {
+                    if lists.is_empty() { blank_line(&mut out) } else { newline(&mut out) }
+                    lists.push(Some(0));
+                }
+                ("ul" | "ol", true) => {
+                    lists.pop();
+                    if lists.is_empty() {
+                        blank_line(&mut out);
                     }
+                }
+                ("li", false) => {
+                    newline(&mut out);
+                    let depth = lists.len().saturating_sub(1);
+                    out.push_str(&"  ".repeat(depth));
+                    match lists.last_mut() {
+                        Some(Some(n)) => {
+                            *n += 1;
+                            out.push_str(&format!("{n}. "));
+                        }
+                        _ => out.push_str("- "),
+                    }
+                }
+                ("h1" | "h2" | "h3" | "h4" | "h5" | "h6", false) => {
+                    blank_line(&mut out);
+                    let level = name[1..].parse::<usize>().unwrap_or(1).min(3);
+                    out.push_str(&format!("{} ", "#".repeat(level)));
+                }
+                ("blockquote", false) => {
+                    blank_line(&mut out);
+                    out.push_str("> ");
+                }
+                ("pre", false) => {
+                    blank_line(&mut out);
+                    out.push_str("```\n");
+                    pre = true;
+                }
+                ("pre", true) => {
+                    newline(&mut out);
+                    out.push_str("```");
+                    pre = false;
+                    blank_line(&mut out);
+                }
+                ("action-text-attachment", false) => {
+                    if let Some(caption) = attr("caption").or_else(|| attr("filename")).filter(|c| !c.is_empty()) {
+                        out.push_str(&format!("[{caption}]"));
+                    }
+                }
+                ("p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "blockquote", true) => blank_line(&mut out),
+                ("li", true) => {}
                 _ => {}
             }
         } else if c == '&' {
@@ -798,6 +987,11 @@ pub fn html_to_text(html: &str) -> String {
                 "nbsp" => " ",
                 _ => "",
             });
+        } else if c == '\n' && !pre {
+            // Source newlines are layout, not content.
+            if !out.ends_with([' ', '\n']) {
+                out.push(' ');
+            }
         } else {
             out.push(c);
         }
@@ -806,7 +1000,7 @@ pub fn html_to_text(html: &str) -> String {
     while text.contains("\n\n\n") {
         text = text.replace("\n\n\n", "\n\n");
     }
-    text.trim().to_string()
+    text.replace("****", "").trim().to_string()
 }
 
 #[cfg(test)]
@@ -913,8 +1107,155 @@ mod tests {
     }
 
     #[test]
-    fn html_notes_become_text() {
+    fn html_notes_become_markdown() {
         let html = "<div class=\"trix-content\"><div>Call <strong>Bob</strong> &amp; Ann<br>later</div><ul><li>one</li><li>two</li></ul></div>";
-        assert_eq!(html_to_text(html), "Call Bob & Ann\nlater\n• one\n• two");
+        assert_eq!(html_to_markdown(html), "Call **Bob** & Ann\nlater\n\n- one\n- two");
+        let html = "<p>See <a href=\"https://x.io\">the doc</a></p><ol><li>a</li><li>b<ul><li>c</li></ul></li></ol><h2>Next</h2><p><em>soon</em></p>";
+        assert_eq!(html_to_markdown(html), "See [the doc](https://x.io)\n\n1. a\n2. b\n  - c\n\n## Next\n\n*soon*");
+        assert_eq!(html_to_markdown("<action-text-attachment caption=\"plan.pdf\"></action-text-attachment>"), "[plan.pdf]");
+    }
+
+    // Behaviour specs carried over from the Rails app's model tests
+    // (taskestra/test/models/*_test.rb).
+
+    #[test]
+    fn auto_dating_only_dates_fully_unblocked_undated_open_dependents() {
+        let (db, project, _) = setup();
+        let a = db.create_task(input(project, "A")).unwrap();
+        let b = db.create_task(input(project, "B")).unwrap();
+        let both = db.create_task(TaskInput { needs: vec![a, b], ..input(project, "Needs A and B") }).unwrap();
+        let dated = db
+            .create_task(TaskInput { needs: vec![a], due_on: NaiveDate::from_ymd_opt(2030, 1, 1), ..input(project, "Already dated") })
+            .unwrap();
+        let done = db.create_task(TaskInput { needs: vec![a], ..input(project, "Done dependent") }).unwrap();
+        db.complete_task(a).unwrap();
+        db.complete_task(done).unwrap();
+        db.uncomplete_task(done).unwrap();
+        db.complete_task(done).unwrap();
+        let done_due = db.snapshot().unwrap().task(done).unwrap().due_on;
+
+        assert_eq!(db.auto_date_unblocked_dependents(a).unwrap(), 0);
+        let snap = db.snapshot().unwrap();
+        assert_eq!(snap.task(both).unwrap().due_on, None, "B still blocks it");
+        assert_eq!(snap.task(dated).unwrap().due_on, NaiveDate::from_ymd_opt(2030, 1, 1), "existing dates are kept");
+        assert_eq!(snap.task(done).unwrap().due_on, done_due, "completed dependents are left alone");
+
+        db.complete_task(b).unwrap();
+        assert_eq!(db.auto_date_unblocked_dependents(b).unwrap(), 1, "the last blocker dates it");
+        let t = db.snapshot().unwrap().task(both).cloned().unwrap();
+        assert_eq!(t.due_on, Some(dates::today()));
+        assert!(t.due_on_auto_set);
+        assert_eq!(db.auto_date_unblocked_dependents(both).unwrap(), 0, "an open task dates nothing");
+    }
+
+    #[test]
+    fn completion_keeps_an_existing_date_and_is_idempotent() {
+        let (db, project, _) = setup();
+        let due = NaiveDate::from_ymd_opt(2026, 1, 15);
+        let id = db.create_task(TaskInput { due_on: due, ..input(project, "Dated") }).unwrap();
+        db.complete_task(id).unwrap();
+        let first = db.snapshot().unwrap().task(id).cloned().unwrap();
+        assert_eq!(first.due_on, due);
+        assert!(!first.due_on_auto_set);
+        db.complete_task(id).unwrap();
+        assert_eq!(db.snapshot().unwrap().task(id).unwrap().completed_at, first.completed_at);
+        db.uncomplete_task(id).unwrap();
+        assert_eq!(db.snapshot().unwrap().task(id).unwrap().due_on, due, "only auto dates are cleared");
+    }
+
+    #[test]
+    fn subtask_dates_relative_to_the_parent() {
+        let (db, project, _) = setup();
+        let undated = db.create_task(input(project, "Undated parent")).unwrap();
+        db.create_task(TaskInput { parent_id: Some(undated), due_on: NaiveDate::from_ymd_opt(2020, 1, 1), ..input(project, "Any") })
+            .expect("a parent without a date allows any");
+        let parent = db.create_task(TaskInput { due_on: NaiveDate::from_ymd_opt(2026, 5, 1), ..input(project, "Parent") }).unwrap();
+        db.create_task(TaskInput { parent_id: Some(parent), due_on: NaiveDate::from_ymd_opt(2026, 5, 1), ..input(project, "Same day") })
+            .expect("same day as the parent is fine");
+        let child = db.create_task(TaskInput { parent_id: Some(parent), ..input(project, "No date") }).unwrap();
+        // Completing a sub-task with no date gives it today, which may
+        // precede its parent: still allowed.
+        db.complete_task(child).unwrap();
+        db.uncomplete_task(child).unwrap();
+        let snap = db.snapshot().unwrap();
+        assert_eq!(snap.task(parent).unwrap().subtasks.len(), 2);
+        let positions: Vec<i64> = snap.task(parent).unwrap().subtasks.iter().map(|id| snap.task(*id).unwrap().position).collect();
+        assert_eq!(positions, [0, 1], "sub-tasks are numbered in creation order");
+        assert_eq!(snap.task(parent).unwrap().position, 0);
+    }
+
+    #[test]
+    fn search_matches_titles_and_notes_case_insensitively() {
+        let (db, project, _) = setup();
+        let a = db.create_task(TaskInput { notes: "Call the **Vendor**".into(), ..input(project, "Budget") }).unwrap();
+        let b = db.create_task(input(project, "vendor contract")).unwrap();
+        db.create_task(input(project, "Unrelated")).unwrap();
+        let snap = db.snapshot().unwrap();
+        assert_eq!(snap.search("VENDOR", &[]), vec![b, a], "title hits first, then notes");
+        assert!(snap.search("nothing like it", &[]).is_empty());
+        assert_eq!(snap.search("vendor", &[b]), vec![a]);
+    }
+
+    #[test]
+    fn names_and_links_are_trimmed_and_unique_ignoring_case() {
+        let (db, project, ann) = setup();
+        db.update_project(project, &ProjectInput { name: "  Alpha  ".into(), link: " https://a.io ".into(), notes: String::new() })
+            .unwrap();
+        let snap = db.snapshot().unwrap();
+        assert_eq!(snap.project(project).unwrap().name, "Alpha");
+        assert_eq!(snap.project(project).unwrap().link, "https://a.io");
+        assert!(matches!(db.find_or_create_project(" ALPHA ").unwrap(), Created::Existing(id, _) if id == project));
+        let bob = db.create_person("Bob").unwrap().id();
+        assert_eq!(db.rename_person(bob, "ANN").unwrap_err(), "Name has already been taken");
+        db.rename_person(ann, " Annie ").unwrap();
+        assert_eq!(db.snapshot().unwrap().person(ann).unwrap().name, "Annie");
+        assert_eq!(db.create_task(TaskInput { link: "https://has space.io".into(), ..input(project, "x") }).unwrap_err(),
+            "Link must be a valid URL (starting with http:// or https://)");
+    }
+
+    #[test]
+    fn migrations_are_versioned_and_reopen_cleanly() {
+        let dir = std::env::temp_dir().join(format!("omniscient-test-{}", std::process::id()));
+        let path = dir.join("db.sqlite3");
+        {
+            let db = Db::open(&path).unwrap();
+            db.create_person("Ann").unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v as usize, MIGRATIONS.len());
+        assert_eq!(db.snapshot().unwrap().people.len(), 1);
+        db.conn.pragma_update(None, "user_version", 99i64).unwrap();
+        drop(db);
+        assert!(Db::open(&path).err().unwrap().contains("newer Omniscient"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn importing_the_rails_fixture() {
+        let dir = std::env::temp_dir().join(format!("omniscient-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rails = dir.join("rails.sqlite3");
+        let src = Connection::open(&rails).unwrap();
+        src.execute_batch(include_str!("../../tests/rails_fixture.sql")).unwrap();
+        // Hazards the importer must survive.
+        src.execute_batch(
+            "INSERT INTO people (id, name, created_at, updated_at) VALUES (90, NULL, '2026-01-01', '2026-01-01');
+             INSERT INTO tasks (id, project_id, what, created_at, updated_at, position) VALUES (900, 999, 'Orphan', '2026-01-01', '2026-01-01', 0);",
+        )
+        .unwrap();
+        drop(src);
+        let db = Db::memory().unwrap();
+        let summary = db.import_rails(&rails).unwrap();
+        assert!(summary.starts_with("Imported 4 people, 4 projects and 13 tasks."), "{summary}");
+        assert!(summary.contains("person #90") && summary.contains("task #900"), "{summary}");
+        let snap = db.snapshot().unwrap();
+        assert_eq!(
+            snap.project(1).unwrap().notes,
+            "Goal: ship the **new homepage** before the launch.\nStakeholders: marketing & sales.",
+            "notes keep their formatting as Markdown"
+        );
+        assert!(db.import_rails(&rails).is_err(), "only into an empty database");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
