@@ -101,8 +101,14 @@ Item {
                     font.strikeout: root.d.done
                     font.italic: root.d.done
                     color: root.d.done ? Theme.doneText : Theme.fg
-                    Layout.fillWidth: implicitWidth > width
-                    Layout.maximumWidth: implicitWidth
+                    // Hugs its text, but gives way (eliding) before the
+                    // Who/When columns do.
+                    Layout.fillWidth: true
+                    // Rounded up: layouts snap to whole pixels, and a fractional
+                    // natural width would elide by a hair.
+                    Layout.maximumWidth: Math.ceil(implicitWidth)
+                    Layout.preferredWidth: Math.ceil(implicitWidth)
+                    Layout.minimumWidth: Math.min(Math.ceil(implicitWidth), Theme.sp(80))
                     Behavior on color { ColorAnimation { duration: Theme.quick } }
                 }
                 Chip {
