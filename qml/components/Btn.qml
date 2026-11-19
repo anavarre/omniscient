@@ -52,7 +52,7 @@ AbstractButton {
             Behavior on color { ColorAnimation { duration: Theme.quick } }
         }
         Label {
-            visible: root.hint !== ""
+            visible: false  // shortcuts are shown only in the Shortcuts panel
             text: root.hint
             color: root.primary ? Theme.onAccent : Theme.fgDim
             opacity: root.primary ? 0.7 : 1

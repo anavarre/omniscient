@@ -30,7 +30,7 @@ ColumnLayout {
             glyph: Icons.back
             onClicked: Store.go("projects")
             ToolTip.visible: hovered
-            ToolTip.text: "Back to projects  Esc"
+            ToolTip.text: "Back to projects"
             ToolTip.delay: 500
         }
         ColumnLayout {
@@ -113,7 +113,7 @@ ColumnLayout {
         Layout.topMargin: Theme.sp(4)
         spacing: Theme.sp(10)
         Segmented {
-            visible: Store.page === "tasks" && !!root.s.identity
+            visible: (Store.page === "tasks" || Store.page === "project") && !!root.s.identity
             readonly property var mineAll: [{ value: "mine", label: "Mine", hint: root.narrow ? "" : "g m" }, { value: "all", label: "All", hint: root.narrow ? "" : "g a" }]
             options: mineAll
             current: root.s.mine ? "mine" : "all"

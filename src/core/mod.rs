@@ -6,6 +6,7 @@ pub mod controller;
 pub mod dates;
 pub mod db;
 pub mod json;
+pub mod location;
 pub mod model;
 pub mod rows;
 pub mod theme;

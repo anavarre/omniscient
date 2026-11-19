@@ -24,7 +24,14 @@ Rectangle {
     Behavior on color { ColorAnimation { duration: Theme.quick } }
 
     HoverHandler { id: hover; cursorShape: root.clickable ? Qt.PointingHandCursor : Qt.ArrowCursor }
-    TapHandler { enabled: root.clickable; onTapped: root.clicked() }
+    // MouseAreas, not TapHandlers: a handler-only item doesn't accept the
+    // press, so the click also reached whatever lies beneath (the scrim, or
+    // a task row) and closed or replaced the dialog the chip sits in.
+    MouseArea {
+        anchors.fill: parent
+        enabled: root.clickable
+        onClicked: root.clicked()
+    }
 
     RowLayout {
         id: row
@@ -52,7 +59,7 @@ Rectangle {
             color: x.hovered ? Theme.red : Theme.fgDim
             font.pixelSize: Theme.caption
             HoverHandler { id: x; cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: root.removed() }
+            MouseArea { anchors.fill: parent; anchors.margins: -Theme.sp(3); onClicked: root.removed() }
         }
     }
 }

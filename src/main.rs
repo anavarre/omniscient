@@ -6,7 +6,6 @@
 pub mod bridge;
 pub mod core;
 
-use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};
@@ -19,35 +18,24 @@ Omniscient — tasks, projects and collaborators, natively on Omarchy
 Usage: omniscient [--db <path>] [--import <rails.sqlite3>]
 
 Options:
-  --db <path>        Use this SQLite database
-                     (default: $XDG_DATA_HOME/omniscient/omniscient.sqlite3)
+  --db <path>        Use this SQLite database for this launch
+                     (else $OMNISCIENT_DB, else `db_path` in
+                     $XDG_CONFIG_HOME/omniscient/config.toml, else
+                     $XDG_DATA_HOME/omniscient/omniscient.sqlite3;
+                     Settings → Database location writes the config)
   --import <path>    Copy a Taskestra (Rails) database into an empty one, then exit
   --gallery          Show every UI component (theme check)
   -h, --help         Show this help
   -V, --version      Show the version";
 
-/// One window per database: a second launch focuses the first. Returns the
-/// listener to hold for the app's lifetime, or None if another instance
-/// owns the database.
-fn claim_instance(db: &std::path::Path) -> Option<Option<UnixListener>> {
-    let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") else { return Some(None) };
-    let tag: u64 = db.to_string_lossy().bytes().fold(1469598103934665603, |h, b| (h ^ b as u64).wrapping_mul(1099511628211));
-    let sock = PathBuf::from(runtime).join(format!("omniscient-{tag:016x}.sock"));
-    if std::os::unix::net::UnixStream::connect(&sock).is_ok() {
-        return None;
-    }
-    let _ = std::fs::remove_file(&sock);
-    Some(UnixListener::bind(&sock).ok())
-}
-
 fn main() {
-    let mut db_path = core::db::default_path();
+    let mut db_flag: Option<PathBuf> = None;
     let mut import: Option<PathBuf> = None;
     let mut gallery = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--db" => db_path = args.next().map(PathBuf::from).unwrap_or(db_path),
+            "--db" => db_flag = args.next().map(PathBuf::from).or(db_flag),
             "--import" => import = args.next().map(PathBuf::from),
             "--gallery" => gallery = true,
             "-h" | "--help" => {
@@ -65,6 +53,9 @@ fn main() {
         }
     }
 
+    let location = core::location::resolve(db_flag);
+    let db_path = location.path.clone();
+
     if let Some(src) = import {
         match core::db::Db::open(&db_path).and_then(|db| db.import_rails(&src)) {
             Ok(summary) => println!("{summary}\nDatabase: {}", db_path.display()),
@@ -76,13 +67,13 @@ fn main() {
         return;
     }
 
-    let Some(_instance) = claim_instance(&db_path) else {
+    if !core::location::hold_instance(&db_path) {
         let _ = std::process::Command::new("hyprctl")
             .args(["dispatch", "focuswindow", &format!("class:^({APP_ID})$")])
             .stdout(std::process::Stdio::null())
             .status();
         return;
-    };
+    }
 
     // OMNISCIENT_DEBUG_KEYS replays a key sequence then quits (smoke tests).
     // OMNISCIENT_SCREENSHOT saves the window as PNG when the replay ends.
@@ -91,7 +82,7 @@ fn main() {
     let replay = if replay.is_empty() && !screenshot.is_empty() { "wait wait wait".to_string() } else { replay };
     // OMNISCIENT_GEOMETRY=WxH sizes the window (layout checks).
     let geometry = std::env::var("OMNISCIENT_GEOMETRY").unwrap_or_default();
-    let _ = bridge::app::LAUNCH.set(bridge::app::Launch { db_path, replay, screenshot, geometry, gallery });
+    let _ = bridge::app::LAUNCH.set(bridge::app::Launch { location, replay, screenshot, geometry, gallery });
 
     let mut app = QGuiApplication::new();
     QGuiApplication::set_desktop_file_name(&QString::from(APP_ID));

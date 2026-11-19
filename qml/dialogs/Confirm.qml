@@ -7,7 +7,7 @@ Modal {
     id: root
     property string text: ""
     property string action: "OK"
-    property var onYes: null
+    property var callback: null
     glyph: Icons.warning
     cardWidth: Theme.sp(440)
     onAccepted: yes()
@@ -16,8 +16,8 @@ Modal {
     function yes() {
         if (closing)
             return
-        if (onYes)
-            onYes()
+        if (callback)
+            callback()
         close()
     }
     Keys.onReturnPressed: yes()

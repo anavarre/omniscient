@@ -73,7 +73,7 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         Label {
-            text: root.preview ? "Preview — double-click or Ctrl+E to edit" : "Markdown supported · Ctrl+E to preview"
+            text: root.preview ? "Preview — double-click to edit" : "Markdown supported"
             color: Theme.fgDim
             font.pixelSize: Theme.caption
             Layout.fillWidth: true

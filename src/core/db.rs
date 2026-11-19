@@ -107,16 +107,27 @@ impl Created {
 
 pub struct Db {
     conn: Connection,
+    /// The file behind `conn` (None for in-memory test databases).
+    path: Option<PathBuf>,
     /// Rows changed by settings writes, which never affect the snapshot.
     setting_changes: std::cell::Cell<u64>,
 }
 
 pub fn default_path() -> PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"));
-    base.join("omniscient").join("omniscient.sqlite3")
+    crate::core::location::default_db()
+}
+
+fn sidecar(db: &Path, suffix: &str) -> PathBuf {
+    let mut s = db.as_os_str().to_owned();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+/// Deletes a database and its WAL/shm files (a half-made destination).
+pub fn remove_files(db: &Path) {
+    for p in [db.to_path_buf(), sidecar(db, "-wal"), sidecar(db, "-shm")] {
+        let _ = std::fs::remove_file(p);
+    }
 }
 
 fn valid_link(link: &str) -> bool {
@@ -138,17 +149,21 @@ impl Db {
             std::fs::create_dir_all(dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
         }
         let conn = Connection::open(path).map_err(err)?;
-        Self::init(conn)
+        Self::init(conn, Some(path.to_path_buf()))
     }
 
     pub fn memory() -> Result<Db> {
-        Self::init(Connection::open_in_memory().map_err(err)?)
+        Self::init(Connection::open_in_memory().map_err(err)?, None)
     }
 
-    fn init(conn: Connection) -> Result<Db> {
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    fn init(conn: Connection, path: Option<PathBuf>) -> Result<Db> {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
             .map_err(err)?;
-        let db = Db { conn, setting_changes: std::cell::Cell::new(0) };
+        let db = Db { conn, path, setting_changes: std::cell::Cell::new(0) };
         db.migrate()?;
         Ok(db)
     }
@@ -675,6 +690,74 @@ impl Db {
             tx.execute("UPDATE tasks SET position = ?1 WHERE id = ?2", params![pos as i64, id]).map_err(err)?;
         }
         tx.commit().map_err(err)
+    }
+
+    // ------------------------------------------------------------ relocation
+
+    /// Copies the whole database to `dest` and returns it opened there. The
+    /// original is never touched, so any failure leaves everything as it was.
+    ///
+    /// `VACUUM INTO` writes a consistent snapshot (WAL included) to a
+    /// temporary file beside `dest`; that copy is verified (integrity, foreign
+    /// keys, schema version, row count of every table) and only then linked
+    /// into place without overwriting anything.
+    pub fn copy_to(&self, dest: &Path) -> Result<Db> {
+        let sidecars = ["-wal", "-shm", "-journal"].map(|s| sidecar(dest, s));
+        if std::iter::once(dest).chain(sidecars.iter().map(PathBuf::as_path)).any(|p| p.symlink_metadata().is_ok()) {
+            return Err(format!("{} already exists; choose a new file name.", dest.display()));
+        }
+        let dir = dest.parent().ok_or("Bad destination")?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+        let name = dest.file_name().ok_or("Bad destination")?.to_string_lossy();
+        let tmp = dir.join(format!(".{name}.moving-{}", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+
+        let staged = self.stage_copy(&tmp);
+        let linked = staged.and_then(|()| {
+            // hard_link refuses to replace a file that appeared meanwhile.
+            std::fs::hard_link(&tmp, dest).map_err(|e| format!("Cannot place {}: {e}", dest.display()))
+        });
+        let _ = std::fs::remove_file(&tmp);
+        linked?;
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+        Db::open(dest).inspect_err(|_| remove_files(dest))
+    }
+
+    fn stage_copy(&self, tmp: &Path) -> Result<()> {
+        let tmp_str = tmp.to_str().ok_or("The path must be valid UTF-8")?;
+        self.conn.execute("VACUUM INTO ?1", [tmp_str]).map_err(|e| format!("Copy failed: {e}"))?;
+        let check = Connection::open_with_flags(tmp, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(err)?;
+        let one = |sql: &str| check.query_row(sql, [], |r| r.get::<_, String>(0)).map_err(err);
+        if one("PRAGMA integrity_check")? != "ok" {
+            return Err("The copy failed its integrity check; nothing was changed.".into());
+        }
+        if check.prepare("PRAGMA foreign_key_check").and_then(|mut s| s.exists([])).map_err(err)? {
+            return Err("The copy failed its foreign-key check; nothing was changed.".into());
+        }
+        let version = |c: &Connection| c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).map_err(err);
+        if version(&check)? != version(&self.conn)? {
+            return Err("The copy has a different schema version; nothing was changed.".into());
+        }
+        let counts = |c: &Connection| -> Result<Vec<(String, i64)>> {
+            let tables: Vec<String> = c
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+                .and_then(|mut s| s.query_map([], |r| r.get(0))?.collect())
+                .map_err(err)?;
+            tables
+                .into_iter()
+                .map(|t| {
+                    let n = c.query_row(&format!("SELECT count(*) FROM \"{}\"", t.replace('"', "\"\"")), [], |r| r.get(0)).map_err(err)?;
+                    Ok((t, n))
+                })
+                .collect()
+        };
+        if counts(&check)? != counts(&self.conn)? {
+            return Err("The copy doesn't match the original; nothing was changed.".into());
+        }
+        drop(check);
+        std::fs::File::open(tmp).and_then(|f| f.sync_all()).map_err(|e| format!("Cannot flush the copy: {e}"))
     }
 
     // ------------------------------------------------------------ import
@@ -1256,6 +1339,40 @@ mod tests {
         db.conn.pragma_update(None, "user_version", 99i64).unwrap();
         drop(db);
         assert!(Db::open(&path).err().unwrap().contains("newer Omniscient"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn copy_to_is_verified_never_overwrites_and_cleans_up() {
+        let dir = std::env::temp_dir().join(format!("omniscient-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = Db::open(&dir.join("a/src.sqlite3")).unwrap();
+        let p = src.create_project(&ProjectInput { name: "P".into(), link: String::new(), notes: String::new() }).unwrap();
+        src.create_person("Ann").unwrap();
+        src.create_task(input(p, "one")).unwrap();
+        src.set_setting("grouping", Some("project")).unwrap();
+
+        let dest = dir.join("b/c/dest.sqlite3");
+        let moved = src.copy_to(&dest).unwrap();
+        let (a, b) = (src.snapshot().unwrap(), moved.snapshot().unwrap());
+        assert_eq!((a.tasks.len(), a.people.len(), a.projects.len()), (b.tasks.len(), b.people.len(), b.projects.len()));
+        assert_eq!(moved.setting("grouping").as_deref(), Some("project"));
+        assert_eq!(moved.path(), Some(dest.as_path()));
+        // Source untouched; no temp files left beside the destination.
+        assert_eq!(src.snapshot().unwrap().tasks.len(), 1);
+        let leftovers: Vec<_> = std::fs::read_dir(dest.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("moving")).collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+
+        // An existing file (or stale WAL) is never replaced.
+        assert!(src.copy_to(&dest).err().unwrap().contains("already exists"));
+        std::fs::write(dir.join("stale.sqlite3-wal"), b"x").unwrap();
+        assert!(src.copy_to(&dir.join("stale.sqlite3")).err().unwrap().contains("already exists"));
+        // An unwritable destination fails without touching the source.
+        assert!(src.copy_to(Path::new("/proc/nope/x.sqlite3")).is_err());
+        assert_eq!(src.snapshot().unwrap().tasks.len(), 1);
+        // The in-memory database can be saved to disk too.
+        assert!(Db::memory().unwrap().copy_to(&dir.join("mem.sqlite3")).is_ok());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

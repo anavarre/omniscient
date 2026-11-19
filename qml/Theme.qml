@@ -32,6 +32,10 @@ QtObject {
     readonly property int transition: 260
     // Interaction feedback.
     readonly property int quick: 120
+    // Moving the selection between rows: slow enough to read as a glide.
+    readonly property int soft: 260
+    // Slow, gentle fades for keyboard-driven selection changes.
+    readonly property int calm: 420
 
     readonly property string name: n("name", "")
     readonly property bool dark: n("dark", true)
@@ -44,16 +48,18 @@ QtObject {
 
     // The shell's type scale. App body sits a step above the bar's 12px:
     // task titles are read, not glanced at.
-    readonly property int caption: f("bodySmall", 11)
-    readonly property int small: f("body", 12)
-    readonly property int body: f("title", 14)
-    readonly property int heading: f("heading", 16)
-    readonly property int display: f("display", 24)
-    readonly property int iconLarge: f("iconLarge", 18)
+    // User zoom (Settings, Ctrl+= / Ctrl+-): scales type and spacing together.
+    property real zoom: 1
+    readonly property int caption: Math.round(f("bodySmall", 11) * zoom)
+    readonly property int small: Math.round(f("body", 12) * zoom)
+    readonly property int body: Math.round(f("title", 14) * zoom)
+    readonly property int heading: Math.round(f("heading", 16) * zoom)
+    readonly property int display: Math.round(f("display", 24) * zoom)
+    readonly property int iconLarge: Math.round(f("iconLarge", 18) * zoom)
 
     // The shell's Style.space(px).
     function sp(px) {
-        return Math.max(1, Math.round(px * spacingScale))
+        return Math.max(1, Math.round(px * spacingScale * zoom))
     }
 
     property color bg: c("bg", "#101315")

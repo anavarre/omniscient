@@ -62,7 +62,8 @@ impl Task {
 pub enum Scope {
     All,
     Mine(i64),
-    Project(i64),
+    /// A project, optionally narrowed to one person's tasks.
+    Project(i64, Option<i64>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,7 +173,7 @@ impl Snapshot {
             .filter(|t| match scope {
                 Scope::All => true,
                 Scope::Mine(person) => t.people.contains(&person),
-                Scope::Project(project) => t.project_id == project,
+                Scope::Project(project, who) => t.project_id == project && who.is_none_or(|w| t.people.contains(&w)),
             })
             .map(|t| t.id)
             .collect();
@@ -187,7 +188,7 @@ impl Snapshot {
             .filter(|t| match scope {
                 Scope::All => true,
                 Scope::Mine(person) => t.people.contains(&person),
-                Scope::Project(project) => t.project_id == project,
+                Scope::Project(project, who) => t.project_id == project && who.is_none_or(|w| t.people.contains(&w)),
             })
             .count()
     }
@@ -273,7 +274,7 @@ impl Snapshot {
             .values()
             .filter(|t| t.completed() && t.parent_id.is_none())
             .filter(|t| match scope {
-                Scope::Project(p) => t.project_id == p,
+                Scope::Project(p, who) => t.project_id == p && who.is_none_or(|w| t.people.contains(&w)),
                 _ => true,
             })
             .collect();

@@ -82,7 +82,6 @@ Item {
         RowLayout {
             spacing: Theme.sp(4)
             opacity: hover.hovered || root.isCurrent || root.pending ? 1 : 0
-            Behavior on opacity { NumberAnimation { duration: Theme.quick } }
             Btn {
                 visible: !root.d.archived
                 kind: root.pending ? "normal" : "flat"

@@ -41,7 +41,8 @@ QtObject {
     signal newTask(var defaults)
     signal openProject(int id)
     signal newProject()
-    signal openSettings(bool addPerson)
+    signal openSettings()
+    signal openCollaborators(bool addPerson)
     signal openPerson(int id)
     signal openSearch()
     signal openShortcuts()
@@ -65,6 +66,13 @@ QtObject {
     function query(name, args) {
         return parse(App.query(name, JSON.stringify(args || {})))
     }
+
+    function setZoom(z) {
+        const r = act("zoom", { value: z })
+        if (r) Theme.zoom = r.value
+    }
+    function stepZoom(delta) { setZoom(Math.round((Theme.zoom + delta) * 100) / 100) }
+    Component.onCompleted: Theme.zoom = query("zoom", {}).value || 1
 
     function go(page, id) {
         act("go", id === undefined ? { page: page } : { page: page, id: id })

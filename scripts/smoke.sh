@@ -58,6 +58,12 @@ fresh
 run "create a task on a project page" \
   "p j Return t type:Smoke_task Tab Tab type:tom S-Return" \
   "SELECT count(*) FROM tasks WHERE what = 'Smoke task' AND due_on = date('now', 'localtime', '+1 day')" 1
+run "Escape on unsaved input asks first, and cancelling keeps the work" \
+  "p j Return t type:Keep_me Escape wait Escape wait S-Return" \
+  "SELECT count(*) FROM tasks WHERE what = 'Keep me'" 1
+run "discarding unsaved input needs confirmation" \
+  "p j Return t type:Drop_me Escape wait Return wait" \
+  "SELECT count(*) FROM tasks WHERE what = 'Drop me'" 0
 run "creating without a project shows an error and keeps the dialog" \
   "h t type:Orphan S-Return wait Escape" \
   "SELECT count(*) FROM tasks WHERE what = 'Orphan'" 0
@@ -67,8 +73,8 @@ run "edit a task's date by typing" \
 run "notes preview toggles" \
   "h Return Tab Tab Tab Tab Tab Tab Tab type:**bold** C-e wait C-e S-Return" \
   "SELECT count(*) FROM tasks WHERE notes LIKE '%**bold**%'" 1
-run "pick a different identity in Settings" \
-  "s BackSpace Down Down Return Escape g m" \
+run "pick a different identity in Collaborators" \
+  "c BackSpace Down Down Return Escape g m" \
   "SELECT value <> '1' FROM settings WHERE key = 'identity'" 1
 run "add a collaborator" \
   "C type:Smoke_Person Return Escape" \
@@ -78,6 +84,24 @@ run "search opens a task" \
 run "projects with open tasks can't be archived" \
   "p j a" \
   "SELECT count(*) FROM projects WHERE archived_at IS NOT NULL" 1
+
+# Settings → Database location: no --db, so the saved location is in play.
+fresh
+rm -rf "$TMP/xdg"; mkdir -p "$TMP/xdg/data/omniscient"
+cp "$TMP/app.sqlite3" "$TMP/xdg/data/omniscient/omniscient.sqlite3"
+# Focus order in Settings: the new-location field is first, so no tabbing needed.
+tabs=""
+QT_QPA_PLATFORM=offscreen QT_FATAL_WARNINGS=1 OMNISCIENT_OMARCHY_STATE="$TMP/state" \
+  XDG_DATA_HOME="$TMP/xdg/data" XDG_CONFIG_HOME="$TMP/xdg/cfg" XDG_RUNTIME_DIR="$TMP/xdg" \
+  OMNISCIENT_DEBUG_KEYS="s ${tabs}type:$TMP/xdg/moved/ Return wait Escape" \
+  timeout 60 "$BIN" >"$TMP/log" 2>&1
+want=$(sqlite3 "$TMP/app.sqlite3" "SELECT count(*) FROM tasks")
+got=$(sqlite3 "$TMP/xdg/moved/omniscient.sqlite3" "SELECT count(*) FROM tasks" 2>&1)
+if [ "$got" = "$want" ] && grep -q "xdg/moved/omniscient.sqlite3" "$TMP/xdg/cfg/omniscient/config.toml"; then
+  echo "ok   move the database from Settings"
+else
+  echo "FAIL move the database from Settings: tasks '$got', want '$want'"; sed 's/^/     /' "$TMP/log" | head; fail=1
+fi
 
 # Live theme switch mid-run: swap the theme the way omarchy-theme-set does.
 ( sleep 1.5

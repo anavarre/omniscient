@@ -16,7 +16,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 use crate::core::dates;
-use crate::core::db::{Created, Db, ProjectInput, TaskInput};
+use crate::core::db::{self, Created, Db, ProjectInput, TaskInput};
+use crate::core::location::{self, Location};
 use crate::core::model::{self, Grouping, Scope, Section, Snapshot, Task};
 use crate::core::rows::Row;
 
@@ -40,6 +41,8 @@ pub struct Controller {
     /// Tasks page grouping; the project page keeps its own (Date / Person).
     grouping: Grouping,
     project_grouping: Grouping,
+    /// Mine/All inside a project; per session, independent of the global filter.
+    project_mine: bool,
     identity: Option<i64>,
     mine: bool,
     /// Parents whose sub-tasks are showing.
@@ -56,6 +59,8 @@ pub struct Controller {
     auto_dating: HashMap<i64, u64>,
     toast: Option<(u64, String, bool)>,
     toast_seq: u64,
+    /// Where the database lives and who decided; None disables moving it.
+    location: Option<Location>,
     /// Overridable clock (tests).
     now: fn() -> u64,
 }
@@ -137,6 +142,7 @@ impl Controller {
             page: Page::Tasks,
             grouping,
             project_grouping: Grouping::Date,
+            project_mine: false,
             identity,
             mine,
             expanded: HashSet::new(),
@@ -148,6 +154,7 @@ impl Controller {
             auto_dating: HashMap::new(),
             toast: None,
             toast_seq: 0,
+            location: None,
             now: wall_ms,
         })
     }
@@ -156,6 +163,54 @@ impl Controller {
     fn with_clock(mut self, now: fn() -> u64) -> Self {
         self.now = now;
         self
+    }
+
+    pub fn set_location(&mut self, location: Location) {
+        self.location = Some(location);
+    }
+
+    /// Moves the database to a new file and makes that the saved location.
+    ///
+    /// Ordered so that every failure leaves the app exactly as it was: pending
+    /// countdowns are committed, the data is copied and verified at the
+    /// destination, the config is rewritten, and only then does the app
+    /// switch over. The old file is left in place for the user to delete.
+    fn move_db(&mut self, input: &str) -> Outcome {
+        let loc = self.location.clone().ok_or("Moving the database isn't available here.")?;
+        if !loc.source.movable() {
+            return Err(format!(
+                "This session was started with {}, which overrides the saved location. Restart without it to move the database.",
+                if loc.source == location::Source::Flag { "--db" } else { "OMNISCIENT_DB" }
+            ));
+        }
+        let dest = location::parse_destination(input)?;
+        let same = |a: &std::path::Path, b: &std::path::Path| match (a.canonicalize(), b.parent().and_then(|p| p.canonicalize().ok())) {
+            (Ok(a), Some(p)) => b.file_name().is_some_and(|n| a == p.join(n)),
+            _ => a == b,
+        };
+        if same(&loc.path, &dest) {
+            return Err("The database is already stored there.".into());
+        }
+
+        self.flush();
+        let new_db = self.db.copy_to(&dest)?;
+        if let Err(e) = location::write_config(&loc.config_file, &dest) {
+            drop(new_db);
+            db::remove_files(&dest);
+            return Err(e);
+        }
+        if !location::hold_instance(&dest) {
+            // Lost a race with another window on that very file: undo.
+            drop(new_db);
+            let _ = location::write_config(&loc.config_file, &loc.path);
+            db::remove_files(&dest);
+            return Err("Another Omniscient window is using that location.".into());
+        }
+        self.db = new_db;
+        self.location = Some(Location { path: dest.clone(), source: location::Source::Config, ..loc.clone() });
+        self.reload()?;
+        self.say("Database moved.", false);
+        Ok(json!({ "path": dest, "old": loc.path }))
     }
 
     pub fn snapshot(&self) -> &Snapshot {
@@ -167,6 +222,7 @@ impl Controller {
         if self.identity.is_some_and(|id| self.snap.person(id).is_none()) {
             self.identity = None;
             self.mine = false;
+            self.project_mine = false;
         }
         if let Page::Project(id) = self.page
             && self.snap.project(id).is_none()
@@ -188,7 +244,7 @@ impl Controller {
 
     fn scope(&self) -> Scope {
         match (self.page, self.identity) {
-            (Page::Project(id), _) => Scope::Project(id),
+            (Page::Project(id), me) => Scope::Project(id, me.filter(|_| self.project_mine)),
             (_, Some(me)) if self.mine => Scope::Mine(me),
             _ => Scope::All,
         }
@@ -242,7 +298,11 @@ impl Controller {
             "filter" => {
                 let mine = args.get("mine").and_then(Value::as_bool).unwrap_or(false);
                 if mine && self.identity.is_none() {
-                    return Err("Choose who you are in Settings (s) to see your tasks.".into());
+                    return Err("Choose who you are in Collaborators (c) to see your tasks.".into());
+                }
+                if matches!(self.page, Page::Project(_)) {
+                    self.project_mine = mine;
+                    return Ok(json!({}));
                 }
                 self.mine = mine;
                 self.db.set_setting("filter", Some(if mine { "mine" } else { "all" }))?;
@@ -254,6 +314,12 @@ impl Controller {
                 self.db.set_setting("identity", self.identity.map(|i| i.to_string()).as_deref())?;
                 self.db.set_setting("filter", Some(if self.mine { "mine" } else { "all" }))?;
                 Ok(json!({}))
+            }
+            "zoom" => {
+                let z = args.get("value").and_then(Value::as_f64).ok_or("missing value")?;
+                let z = (z.clamp(0.8, 2.0) * 100.0).round() / 100.0;
+                self.db.set_setting("zoom", Some(&z.to_string()))?;
+                Ok(json!({ "value": z }))
             }
             "expand" => {
                 let id = need_id()?;
@@ -306,6 +372,7 @@ impl Controller {
                 self.db.reorder(&ids)?;
                 Ok(json!({}))
             }
+            "moveDb" => self.move_db(arg_str(args, "path")),
             "saveTask" => self.save_task(id, args),
             "saveProject" => {
                 let input = ProjectInput {
@@ -494,6 +561,18 @@ impl Controller {
     pub fn query(&self, name: &str, args: &Value) -> Outcome {
         let s = &self.snap;
         match name {
+            "zoom" => Ok(json!({
+                "value": self.db.setting("zoom").and_then(|v| v.parse::<f64>().ok()).filter(|z| (0.8..=2.0).contains(z)).unwrap_or(1.0)
+            })),
+            "location" => Ok(match &self.location {
+                Some(l) => json!({
+                    "path": l.path,
+                    "source": l.source.name(),
+                    "movable": l.source.movable(),
+                    "configFile": l.config_file,
+                }),
+                None => json!({ "movable": false }),
+            }),
             "task" => {
                 let t = s.task(arg_i64(args, "id").ok_or("missing id")?).ok_or("Task not found")?;
                 Ok(json!({
@@ -627,7 +706,7 @@ impl Controller {
             }
             Page::Project(id) => {
                 let p = s.project(id);
-                let n = s.count_open_top_level(Scope::Project(id));
+                let n = s.count_open_top_level(self.scope());
                 (
                     "project",
                     p.map(|p| p.name.clone()).unwrap_or_default(),
@@ -652,7 +731,7 @@ impl Controller {
             "subtitle": subtitle,
             "groupings": groupings,
             "grouping": grouping_name(grouping),
-            "mine": self.mine,
+            "mine": if matches!(self.page, Page::Project(_)) { self.project_mine } else { self.mine },
             "identity": me.map(|p| json!({"id": p.id, "name": p.name, "initials": initials(&p.name)})),
             "projects": active,
             "openTotal": s.count_open_top_level(Scope::All),
@@ -672,7 +751,7 @@ impl Controller {
         let mut out = vec![];
         match self.page {
             Page::Tasks => self.task_rows(&mut out, self.scope(), self.grouping, true),
-            Page::Project(id) => self.task_rows(&mut out, Scope::Project(id), self.project_grouping, false),
+            Page::Project(_) => self.task_rows(&mut out, self.scope(), self.project_grouping, false),
             Page::Projects => self.project_rows(&mut out),
         }
         out
@@ -688,7 +767,8 @@ impl Controller {
         if sections.is_empty() {
             let (title, text) = match scope {
                 Scope::Mine(_) => ("Nothing on your plate", "No open tasks are assigned to you. Press t to add one."),
-                Scope::Project(_) => ("No open tasks", "Press t to add the first one."),
+                Scope::Project(_, Some(_)) => ("Nothing on your plate here", "No open tasks in this project are assigned to you."),
+                Scope::Project(..) => ("No open tasks", "Press t to add the first one."),
                 Scope::All if s.projects.iter().all(|p| p.archived()) => ("Welcome to Omniscient", "Create a project with P, then add tasks with t."),
                 Scope::All => ("All clear", "Every task is done. Press t to add one."),
             };
@@ -865,6 +945,67 @@ mod tests {
         Controller::new(db).unwrap().with_clock(clock)
     }
 
+    #[test]
+    fn moving_the_database_keeps_data_and_pending_completions() {
+        let dir = std::env::temp_dir().join(format!("omniscient-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let old = dir.join("old.sqlite3");
+        let config = dir.join("cfg/config.toml");
+        let mut c = Controller::new(Db::open(&old).unwrap()).unwrap().with_clock(clock);
+        let loc = Location { path: old.clone(), source: location::Source::Default, config_file: config.clone() };
+        c.set_location(loc.clone());
+        let project = ok(&mut c, "createProject", json!({ "name": "P" }))["id"].as_i64().unwrap();
+        let task = ok(&mut c, "saveTask", json!({ "what": "Pending", "projectId": project, "due": "" }))["id"].as_i64().unwrap();
+        ok(&mut c, "toggle", json!({ "id": task })); // counting down, not yet committed
+
+        let new = dir.join("new/data.sqlite3");
+        let out = ok(&mut c, "moveDb", json!({ "path": new.to_str().unwrap() }));
+        assert_eq!(out["path"], json!(new));
+        assert_eq!(location::read_config(&config), Some(new.clone()));
+        assert_eq!(c.query("location", &json!({})).unwrap()["path"], json!(new));
+        // The countdown was committed into the copy, and the app now writes there.
+        assert!(c.snapshot().task(task).unwrap().completed());
+        ok(&mut c, "saveProject", json!({ "name": "Q" }));
+        drop(c);
+        let reopened = Db::open(&new).unwrap().snapshot().unwrap();
+        assert_eq!(reopened.projects.len(), 2);
+        assert!(reopened.task(task).unwrap().completed());
+        // The old file stays as it was, without the later write.
+        assert_eq!(Db::open(&old).unwrap().snapshot().unwrap().projects.len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn moving_the_database_refuses_bad_requests_and_changes_nothing() {
+        let dir = std::env::temp_dir().join(format!("omniscient-move-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let old = dir.join("old.sqlite3");
+        let config = dir.join("config.toml");
+        let mut c = Controller::new(Db::open(&old).unwrap()).unwrap().with_clock(clock);
+        let err = |c: &mut Controller, p: &str| c.act("moveDb", &json!({ "path": p })).unwrap_err();
+        assert!(err(&mut c, "/x/y").contains("isn't available"));
+
+        let mut loc = Location { path: old.clone(), source: location::Source::Flag, config_file: config.clone() };
+        c.set_location(loc.clone());
+        assert!(err(&mut c, "/x/y").contains("--db"));
+        loc.source = location::Source::Env;
+        c.set_location(loc.clone());
+        assert!(err(&mut c, "/x/y").contains("OMNISCIENT_DB"));
+
+        loc.source = location::Source::Default;
+        c.set_location(loc);
+        assert!(err(&mut c, "").contains("Enter a path"));
+        assert!(err(&mut c, "relative.db").contains("absolute"));
+        assert!(err(&mut c, old.to_str().unwrap()).contains("already stored"));
+        let taken = dir.join("taken.sqlite3");
+        std::fs::write(&taken, b"precious").unwrap();
+        assert!(err(&mut c, taken.to_str().unwrap()).contains("already exists"));
+        assert_eq!(std::fs::read(&taken).unwrap(), b"precious");
+        assert!(!config.exists(), "a failed move must not write the config");
+        assert_eq!(c.query("location", &json!({})).unwrap()["path"], json!(old));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     fn ok(c: &mut Controller, name: &str, args: Value) -> Value {
         c.act(name, &args).unwrap_or_else(|e| panic!("{name}: {e}"))
     }
@@ -998,6 +1139,24 @@ mod tests {
         assert_eq!(kinds(&c), ["[Later]", "Hers"]);
         ok(&mut c, "filter", json!({"mine": false}));
         assert_eq!(kinds(&c).len(), 3);
+    }
+
+    #[test]
+    fn mine_filter_works_inside_a_project_without_touching_the_global_one() {
+        let (mut c, p) = setup();
+        let ann = ok(&mut c, "createPerson", json!({"name": "Ann Lee"}))["id"].as_i64().unwrap();
+        task(&mut c, p, "Hers", json!({"people": [ann]}));
+        task(&mut c, p, "Nobody's", json!({}));
+        ok(&mut c, "identity", json!({"id": ann}));
+        ok(&mut c, "go", json!({"page": "project", "id": p}));
+        assert_eq!(kinds(&c).len(), 3, "projects start on All");
+        ok(&mut c, "filter", json!({"mine": true}));
+        assert_eq!(kinds(&c), ["[Later]", "Hers"]);
+        assert_eq!(c.state()["mine"], true);
+        ok(&mut c, "go", json!({"page": "tasks"}));
+        ok(&mut c, "filter", json!({"mine": false}));
+        ok(&mut c, "go", json!({"page": "project", "id": p}));
+        assert_eq!(kinds(&c), ["[Later]", "Hers"], "project choice is independent");
     }
 
     #[test]

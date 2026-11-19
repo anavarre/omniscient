@@ -143,7 +143,7 @@ const ROLE_KEY: i32 = 0x0103;
 
 /// What `main` decided before the QML engine started.
 pub struct Launch {
-    pub db_path: std::path::PathBuf,
+    pub location: crate::core::location::Location,
     pub replay: String,
     pub screenshot: String,
     pub geometry: String,
@@ -196,9 +196,11 @@ impl cxx_qt::Initialize for qobject::App {
             self.as_mut().set_geometry(QString::from(l.geometry.as_str()));
             self.as_mut().set_gallery(l.gallery);
         }
-        let path = launch.map(|l| l.db_path.clone()).unwrap_or_else(crate::core::db::default_path);
+        let location = launch.map(|l| l.location.clone()).unwrap_or_else(|| crate::core::location::resolve(None));
+        let path = location.path.clone();
         match Db::open(&path).and_then(Controller::new) {
-            Ok(ctl) => {
+            Ok(mut ctl) => {
+                ctl.set_location(location);
                 self.as_mut().rust_mut().ctl = Some(ctl);
                 self.as_mut().sync();
             }

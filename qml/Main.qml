@@ -37,6 +37,8 @@ ApplicationWindow {
     readonly property bool compact: width < Theme.sp(1100)
     readonly property bool narrow: width < Theme.sp(760)
     property bool sidebarOpen: true
+    // User-dragged sidebar width in px; 0 = use the default for the window size.
+    property real sidebarUserWidth: 0
     readonly property bool modalOpen: modals.children.length > 0
     readonly property var s: Store.s
 
@@ -70,8 +72,9 @@ ApplicationWindow {
         { group: "Projects", keys: ["e"], label: "Edit project", run: () => editContextProject() },
         { group: "Projects", keys: ["a"], label: "Archive selected project", run: () => onSelected("project", d => Store.act("archive", { id: d.id })) },
         { group: "App", keys: ["f", "/", "Ctrl+K"], label: "Search", run: () => Store.openSearch() },
-        { group: "App", keys: ["s"], label: "Settings & collaborators", run: () => Store.openSettings(false) },
-        { group: "App", keys: ["C"], label: "Add collaborator", run: () => Store.openSettings(true) },
+        { group: "App", keys: ["s"], label: "Settings", run: () => Store.openSettings() },
+        { group: "App", keys: ["c"], label: "Collaborators", run: () => Store.openCollaborators(false) },
+        { group: "App", keys: ["C"], label: "Add collaborator", run: () => Store.openCollaborators(true) },
         { group: "App", keys: ["?"], label: "Shortcuts", run: () => Store.openShortcuts() },
         { group: "Dialogs", keys: ["Shift+Enter"], label: "Save", run: null },
         { group: "Dialogs", keys: ["Ctrl+E"], label: "Preview notes", run: null }
@@ -129,6 +132,9 @@ ApplicationWindow {
 
     Shortcut { sequences: ["Ctrl+K", "Ctrl+F"]; enabled: !win.modalOpen; onActivated: Store.openSearch() }
     Shortcut { sequence: "Ctrl+N"; enabled: !win.modalOpen; onActivated: Store.newTask({}) }
+    Shortcut { sequences: ["Ctrl+=", "Ctrl++"]; onActivated: Store.stepZoom(0.1) }
+    Shortcut { sequence: "Ctrl+-"; onActivated: Store.stepZoom(-0.1) }
+    Shortcut { sequence: "Ctrl+0"; onActivated: Store.setZoom(1) }
     Shortcut { sequence: "Ctrl+Q"; onActivated: win.close() }
 
     // ----------------------------------------------------------- selection
@@ -290,10 +296,47 @@ ApplicationWindow {
             Sidebar {
                 id: sidebar
                 Layout.fillHeight: true
-                Layout.preferredWidth: win.sidebarOpen && !win.narrow ? Theme.sp(win.compact ? 200 : 236) : 0
+                Layout.preferredWidth: win.sidebarOpen && !win.narrow ? (win.sidebarUserWidth > 0 ? win.sidebarUserWidth : Theme.sp(win.compact ? 200 : 236)) : 0
                 visible: Layout.preferredWidth > 0
                 clip: true
-                Behavior on Layout.preferredWidth { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                Behavior on Layout.preferredWidth { enabled: !splitter.drag.active; NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+            }
+
+            // Drag the sidebar's right edge to resize it.
+            Item {
+                id: splitter
+                property alias drag: dragH
+                visible: sidebar.visible && sidebar.width > 0
+                Layout.preferredWidth: 0
+                Layout.fillHeight: true
+                z: 10
+                Item {
+                    id: hit
+                    x: -width / 2
+                    width: Theme.sp(8)
+                    height: parent.height
+                    Rectangle {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 2; height: parent.height
+                        color: Theme.accent
+                        opacity: dragH.active || hh.hovered ? 0.6 : 0
+                        Behavior on opacity { NumberAnimation { duration: Theme.quick } }
+                    }
+                    HoverHandler { id: hh; cursorShape: Qt.SplitHCursor }
+                    DragHandler {
+                        id: dragH
+                        target: null
+                        xAxis.enabled: true
+                        yAxis.enabled: false
+                        property real startW: 0
+                        onActiveChanged: if (active) startW = sidebar.width
+                        onTranslationChanged: if (active) {
+                            const lo = Theme.sp(160), hi = Math.min(Theme.sp(480), win.width * 0.5)
+                            win.sidebarUserWidth = Math.max(lo, Math.min(hi, startW + translation.x))
+                        }
+                    }
+                    TapHandler { acceptedButtons: Qt.LeftButton; onDoubleTapped: win.sidebarUserWidth = 0 }
+                }
             }
 
             Item {
@@ -339,7 +382,7 @@ ApplicationWindow {
                     scroll.to = y
                     scroll.restart()
                 }
-                NumberAnimation { id: scroll; target: list; property: "contentY"; duration: 140; easing.type: Easing.OutCubic }
+                NumberAnimation { id: scroll; target: list; property: "contentY"; duration: 240; easing.type: Easing.InOutCubic }
 
                 header: PageHeader {
                     width: list.width
@@ -482,13 +525,29 @@ ApplicationWindow {
         const m = component.createObject(modals, props || {})
         if (!m)
             console.warn("cannot open dialog:", component.errorString())
-        m.closed.connect(() => Qt.callLater(() => { if (!win.modalOpen) keyRoot.forceActiveFocus() }))
+        m.closed.connect(() => Qt.callLater(() => {
+            if (!win.modalOpen) {
+                keyRoot.forceActiveFocus()
+                return
+            }
+            // A dialog sits underneath (e.g. an editor after a cancelled
+            // "Discard?"): hand it the keyboard back and let it ask again.
+            for (let i = modals.children.length - 1; i >= 0; i--) {
+                const d = modals.children[i]
+                if (d.closing === false) {
+                    d.confirming = false
+                    d.forceActiveFocus()
+                    break
+                }
+            }
+        }))
         return m
     }
 
     Component { id: taskEditor; TaskEditor {} }
     Component { id: projectEditor; ProjectEditor {} }
     Component { id: settings; Settings {} }
+    Component { id: collaborators; Collaborators {} }
     Component { id: personDetail; PersonDetail {} }
     Component { id: search; SearchPalette {} }
     Component { id: shortcuts; Shortcuts {} }
@@ -500,11 +559,12 @@ ApplicationWindow {
         function onNewTask(defaults) { win.openModal(taskEditor, { defaults: defaults }) }
         function onOpenProject(id) { win.openModal(projectEditor, { projectId: id }) }
         function onNewProject() { win.openModal(projectEditor, {}) }
-        function onOpenSettings(addPerson) { win.openModal(settings, { addPerson: addPerson }) }
+        function onOpenSettings() { win.openModal(settings, {}) }
+        function onOpenCollaborators(addPerson) { win.openModal(collaborators, { addPerson: addPerson }) }
         function onOpenPerson(id) { win.openModal(personDetail, { personId: id }) }
         function onOpenSearch() { win.openModal(search, {}) }
         function onOpenShortcuts() { win.openModal(shortcuts, { keymap: win.keymap }) }
-        function onConfirm(title, text, action, onYes) { win.openModal(confirm, { title: title, text: text, action: action, onYes: onYes }) }
+        function onConfirm(title, text, action, onYes) { win.openModal(confirm, { title: title, text: text, action: action, callback: onYes }) }
         function onToast(text, error) { toast.show(text, error) }
     }
 

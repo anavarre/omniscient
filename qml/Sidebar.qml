@@ -112,19 +112,21 @@ Rectangle {
 
         Rectangle { Layout.fillWidth: true; height: 1; color: Theme.hairline; Layout.bottomMargin: Theme.sp(6) }
         NavItem {
-            text: root.s.identity ? root.s.identity.name : "Who are you?"
+            visible: !!root.s.identity
+            text: root.s.identity ? root.s.identity.name : ""
             glyph: Icons.user
-            count: "s"
-            onClicked: Store.openSettings(false)
+            count: "c"
+            onClicked: Store.openCollaborators(false)
         }
         RowLayout {
             Layout.fillWidth: true
             spacing: Theme.sp(2)
-            Btn { kind: "icon"; glyph: Icons.search; onClicked: Store.openSearch(); ToolTip.visible: hovered; ToolTip.text: "Search  Ctrl+K"; ToolTip.delay: 500 }
-            Btn { kind: "icon"; glyph: Icons.plus; onClicked: Store.newTask({}); ToolTip.visible: hovered; ToolTip.text: "New task  t"; ToolTip.delay: 500 }
+            Btn { kind: "icon"; glyph: Icons.search; onClicked: Store.openSearch(); ToolTip.visible: hovered; ToolTip.text: "Search"; ToolTip.delay: 500 }
+            Btn { kind: "icon"; glyph: Icons.plus; onClicked: Store.newTask({}); ToolTip.visible: hovered; ToolTip.text: "New task"; ToolTip.delay: 500 }
             Item { Layout.fillWidth: true }
-            Btn { kind: "icon"; glyph: Icons.keyboard; onClicked: Store.openShortcuts(); ToolTip.visible: hovered; ToolTip.text: "Shortcuts  ?"; ToolTip.delay: 500 }
-            Btn { kind: "icon"; glyph: Icons.cog; onClicked: Store.openSettings(false); ToolTip.visible: hovered; ToolTip.text: "Settings  s"; ToolTip.delay: 500 }
+            Btn { kind: "icon"; glyph: Icons.keyboard; onClicked: Store.openShortcuts(); ToolTip.visible: hovered; ToolTip.text: "Shortcuts"; ToolTip.delay: 500 }
+            Btn { kind: "icon"; glyph: Icons.user; onClicked: Store.openCollaborators(false); ToolTip.visible: hovered; ToolTip.text: "Collaborators"; ToolTip.delay: 500 }
+            Btn { kind: "icon"; glyph: Icons.cog; onClicked: Store.openSettings(); ToolTip.visible: hovered; ToolTip.text: "Settings"; ToolTip.delay: 500 }
         }
     }
 }

@@ -49,8 +49,19 @@ shadertools), a C++17 compiler.
 
 ## Data
 
-SQLite at `~/.local/share/omniscient/omniscient.sqlite3` (`--db <path>` to
-override). The schema is versioned (`PRAGMA user_version`) and upgrades in
+SQLite, at `~/.local/share/omniscient/omniscient.sqlite3` unless you say
+otherwise. To change it, use **Settings → Database location**: it copies the
+database to the new folder or file, verifies the copy (integrity, foreign
+keys, schema version, row counts of every table), saves the new location in
+`~/.config/omniscient/config.toml` (`db_path = "…"`) and switches over. It
+never overwrites an existing file, and the old copy is left in place for you
+to delete. Any failure leaves the app on the old database.
+
+Order of precedence: `--db <path>`, then `OMNISCIENT_DB`, then `db_path` in
+the config file, then the default. The first two apply to one launch only and
+disable the in-app move. To adopt an existing database (say, in a synced
+folder), set `db_path` or `OMNISCIENT_DB`. Don't open one database from two
+machines at once. The schema is versioned (`PRAGMA user_version`) and upgrades in
 place. To bring over data from the Rails app:
 
 ```bash

@@ -16,6 +16,11 @@ FocusScope {
     default property alias content: body.data
     property Item initialFocus: null
     property bool closing: false
+    // Set by editors while they hold unsaved input. Escape and clicks on the
+    // backdrop then ask before throwing it away; only save() or an explicit
+    // "Discard" closes such a dialog.
+    property bool dirty: false
+    property bool confirming: false
     signal accepted()
     signal closed()
 
@@ -30,6 +35,23 @@ FocusScope {
         outro.start()
     }
 
+    // Every user-initiated dismissal (Escape, backdrop, Cancel) goes here.
+    function requestClose() {
+        if (closing)
+            return
+        if (!dirty) {
+            close()
+            return
+        }
+        if (confirming)
+            return
+        confirming = true
+        Store.confirm("Discard your changes?", "What you typed here hasn't been saved.", "Discard", () => {
+            confirming = false
+            close()
+        })
+    }
+
     Component.onCompleted: {
         intro.start()
         if (initialFocus)
@@ -40,7 +62,7 @@ FocusScope {
 
     // Escape bubbles up from fields, so a picker can close its list first.
     Keys.onEscapePressed: event => {
-        root.close()
+        root.requestClose()
         event.accepted = true
     }
     // Text fields eat Return, so submitting is a shortcut, live only while
@@ -56,7 +78,9 @@ FocusScope {
         anchors.fill: parent
         color: Theme.scrim
         opacity: 0
-        TapHandler { onTapped: root.close() }
+        // A MouseArea (not a TapHandler) so the press is accepted and never
+        // reaches the page underneath.
+        MouseArea { anchors.fill: parent; onClicked: root.requestClose() }
     }
 
     Rectangle {
@@ -72,8 +96,10 @@ FocusScope {
         opacity: 0
         scale: 0.985
         clip: true
-        // Swallow clicks so they don't reach the scrim.
-        TapHandler {}
+        // Swallow clicks so they reach neither the scrim nor the page below.
+        // Handler-only items (chips) don't accept the press themselves, so
+        // without this a click on one fell through and dismissed the dialog.
+        MouseArea { anchors.fill: parent }
 
         ColumnLayout {
             id: column

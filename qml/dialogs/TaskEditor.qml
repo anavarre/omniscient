@@ -12,6 +12,12 @@ Modal {
     readonly property bool editing: taskId > 0
     property var t: ({})
     property string errors: ""
+    property string pristine: ""
+    function snapshot() {
+        return JSON.stringify([what.text, when.text, link.text, notes.text, project.ids(),
+                               people.ids(), needs.ids(), enables.ids()])
+    }
+    dirty: pristine !== "" && !closing && snapshot() !== pristine
 
     title: editing ? "Edit task" : t.parentId ? "New sub-task" : "New task"
     glyph: editing ? Icons.edit : Icons.plus
@@ -30,6 +36,7 @@ Modal {
         needs.selected = (t.needs || []).map(r => ({ id: r.id, name: r.what, done: r.done }))
         enables.selected = (t.enables || []).map(r => ({ id: r.id, name: r.what, done: r.done }))
         what.selectAll()
+        pristine = snapshot()
     }
 
     function save() {
@@ -286,7 +293,7 @@ Modal {
                                      "Delete", () => { Store.act("deleteTask", { id: root.taskId }); root.close() })
         },
         Item { Layout.fillWidth: true },
-        Btn { text: "Cancel"; kind: "flat"; hint: "Esc"; onClicked: root.close() },
+        Btn { text: "Cancel"; kind: "flat"; hint: "Esc"; onClicked: root.requestClose() },
         Btn { text: root.editing ? "Save" : "Create task"; kind: "primary"; hint: "⇧↵"; onClicked: root.save() }
     ]
 }
