@@ -45,8 +45,12 @@ Item {
         }
         ColumnLayout {
             Layout.fillWidth: true
+            Layout.maximumWidth: 100000
+            Layout.alignment: Qt.AlignVCenter
             spacing: Theme.sp(2)
             RowLayout {
+                Layout.fillWidth: true
+                Layout.maximumWidth: 100000
                 spacing: Theme.sp(8)
                 Txt {
                     text: root.d.name
@@ -63,6 +67,7 @@ Item {
                     HoverHandler { id: lh; cursorShape: Qt.PointingHandCursor }
                     TapHandler { onTapped: Store.openLink(root.d.link) }
                 }
+                Item { Layout.fillWidth: true }
             }
             Txt {
                 visible: root.d.notes !== "" || root.d.archived
@@ -72,15 +77,30 @@ Item {
                 Layout.fillWidth: true
             }
         }
-        Txt {
-            visible: !root.d.archived
-            text: root.d.open === 0 ? "No open tasks" : root.d.open === 1 ? "1 open task" : root.d.open + " open tasks"
-            color: root.d.open === 0 ? Theme.green : Theme.fgDim
-            font.pixelSize: Theme.small
+        // Fixed columns shared with ProjectLabels.
+        Item {
+            Layout.preferredWidth: Theme.projectCountWidth
+            Layout.preferredHeight: countText.implicitHeight
+            Layout.alignment: Qt.AlignVCenter
+            Txt {
+                id: countText
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width
+                visible: !root.d.archived
+                text: root.d.open === 0 ? "None" : root.d.open
+                color: root.d.open === 0 ? Theme.green : Theme.fgDim
+                font.pixelSize: Theme.small
+                horizontalAlignment: Text.AlignHCenter
+            }
         }
-        Ring { visible: root.pending; until: root.pending ? root.d.pendingUntil : 0 }
+        Ring { visible: root.pending; Layout.alignment: Qt.AlignVCenter; until: root.pending ? root.d.pendingUntil : 0 }
         RowLayout {
+            Layout.alignment: Qt.AlignVCenter
+            Layout.fillWidth: false
+            Layout.preferredWidth: Theme.projectActionsWidth
+            Layout.maximumWidth: Theme.projectActionsWidth
             spacing: Theme.sp(4)
+            Item { Layout.fillWidth: true }
             opacity: hover.hovered || root.isCurrent || root.pending ? 1 : 0
             Btn {
                 visible: !root.d.archived
@@ -108,6 +128,7 @@ Item {
                 onClicked: Store.confirm("Delete “" + root.d.name + "”?", "The project and its completed tasks are removed for good.", "Delete",
                                          () => Store.act("deleteProject", { id: root.d.id }))
             }
+            Item { Layout.fillWidth: true }
         }
     }
 }

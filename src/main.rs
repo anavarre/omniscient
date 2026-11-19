@@ -23,7 +23,7 @@ Options:
                      $XDG_CONFIG_HOME/omniscient/config.toml, else
                      $XDG_DATA_HOME/omniscient/omniscient.sqlite3;
                      Settings → Database location writes the config)
-  --import <path>    Copy a Taskestra (Rails) database into an empty one, then exit
+  --import <path>    Copy an Omniscient (Rails) database into an empty one, then exit
   --gallery          Show every UI component (theme check)
   -h, --help         Show this help
   -V, --version      Show the version";

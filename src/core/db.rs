@@ -770,7 +770,7 @@ impl Db {
         n == 0
     }
 
-    /// Copies a Taskestra (Rails) database in, keeping ids. ActionText notes
+    /// Copies an Omniscient (Rails) database in, keeping ids. ActionText notes
     /// become Markdown. Rows that can't be carried over (blank names, tasks
     /// whose project is gone) are skipped and reported; names that differ
     /// only by case are merged into the first one.
@@ -1227,7 +1227,7 @@ mod tests {
     }
 
     // Behaviour specs carried over from the Rails app's model tests
-    // (taskestra/test/models/*_test.rb).
+    // (omniscient/test/models/*_test.rb).
 
     #[test]
     fn auto_dating_only_dates_fully_unblocked_undated_open_dependents() {

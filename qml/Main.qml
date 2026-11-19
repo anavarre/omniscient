@@ -144,7 +144,7 @@ ApplicationWindow {
         return j === "" ? null : JSON.parse(j)
     }
     function selectable(d) {
-        return d && d.kind !== "section" && d.kind !== "empty"
+        return d && d.kind !== "section" && d.kind !== "empty" && d.kind !== "projectLabels"
     }
     function moveSelection(step) {
         const n = list.count
@@ -411,6 +411,16 @@ ApplicationWindow {
                             required property string row
                             d: JSON.parse(row)
                             width: list.width
+                            narrow: win.narrow
+                            compact: win.compact
+                        }
+                    }
+                    DelegateChoice {
+                        roleValue: "projectLabels"
+                        ProjectLabels {
+                            required property string row
+                            d: JSON.parse(row)
+                            width: list.width
                         }
                     }
                     DelegateChoice {
@@ -435,20 +445,9 @@ ApplicationWindow {
                     }
                 }
 
-                // Rows glide into place as the model changes.
-                add: Transition {
-                    NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 160; easing.type: Easing.OutCubic }
-                }
-                remove: Transition {
-                    NumberAnimation { property: "opacity"; to: 0; duration: 120 }
-                }
-                displaced: Transition {
-                    NumberAnimation { properties: "y"; duration: 180; easing.type: Easing.OutCubic }
-                    NumberAnimation { property: "opacity"; to: 1; duration: 120 }
-                }
-                move: Transition {
-                    NumberAnimation { properties: "y"; duration: 200; easing.type: Easing.OutCubic }
-                }
+                // No add/remove/displaced transitions: with reuseItems they leave
+                // rows stuck at stale positions (a task with notes got overlapped
+                // after switching Mine/All).
 
                 ScrollBar.vertical: ScrollBar {
                     id: vbar

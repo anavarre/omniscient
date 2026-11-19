@@ -43,6 +43,8 @@ AbstractButton {
             text: root.text
             font: root.font
             Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
+            verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
             color: root.primary ? Theme.onAccent
                  : root.danger && root.hovered ? Theme.red

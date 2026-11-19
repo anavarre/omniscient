@@ -1,7 +1,6 @@
 # Omniscient
 
-A native recreation of the [Taskestra](../taskestra) Rails task app for
-[Omarchy](https://omarchy.org): a Rust core with a Qt Quick (QML) interface
+A native task app for [Omarchy](https://omarchy.org): a Rust core with a Qt Quick (QML) interface
 via [cxx-qt](https://github.com/KDAB/cxx-qt), the same toolkit as the
 Omarchy shell. Every colour, size, font and corner comes from the live
 Omarchy theme, and theme switches apply while it runs.
@@ -62,7 +61,7 @@ the config file, then the default. The first two apply to one launch only and
 disable the in-app move. To adopt an existing database (say, in a synced
 folder), set `db_path` or `OMNISCIENT_DB`. Don't open one database from two
 machines at once. The schema is versioned (`PRAGMA user_version`) and upgrades in
-place. To bring over data from the Rails app:
+place. To bring over data from a compatible Rails database:
 
 ```bash
 omniscient --import path/to/production.sqlite3   # only into an empty database
@@ -75,7 +74,7 @@ differ only by case are merged.
 
 ## Using it
 
-The app follows the web app's rules:
+The rules:
 
 - **Sections:** Overdue, Today, Tomorrow and Later. Mine shows every task
   due today or tomorrow; elsewhere each section shows ten tasks plus
@@ -90,9 +89,9 @@ The app follows the web app's rules:
 - **Quitting:** countdowns still running when the window closes or the app
   receives SIGTERM (e.g. at logout) are committed, auto-dating included.
 
-Press `?` for every keyboard shortcut. They match the web app (`j`/`k`,
-`x`, `t`, `g d`/`g p`/`g c`, `g m`/`g a`, `f`, `s`, `e`, `Esc`,
-`Shift+Enter`…), plus:
+Press `?` for every keyboard shortcut. Among them are `j`/`k`,
+`x`, `t`, `g d`/`g p`/`g c`, `g m`/`g a`, `f`, `s`, `e`, `Esc` and
+`Shift+Enter`, plus:
 
 | Key | Action |
 |---|---|
@@ -140,7 +139,7 @@ database. With 3,000 tasks an edit takes a few milliseconds.
 ## Development
 
 ```bash
-make test        # core unit tests, incl. ported Rails model specs and a contrast check of every installed theme
+make test        # core unit tests, incl. ported model specs and a contrast check of every installed theme
 make smoke       # real key presses off-screen, then SQL assertions; any Qt/QML warning fails
 make gallery     # every component on one page, for checking themes by eye
 scripts/shot.sh out.png "j j Return" [theme] [WxH]   # screenshot after replaying keys

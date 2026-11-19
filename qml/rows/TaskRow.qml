@@ -219,13 +219,18 @@ Item {
             visible: active
             sourceComponent: whenComponent
             Layout.preferredWidth: Theme.sp(96)
-            Layout.alignment: Qt.AlignTop | Qt.AlignRight
+            Layout.alignment: Qt.AlignTop
         }
     }
 
     Component {
         id: whoComponent
-        RowLayout {
+        Item {
+          implicitWidth: whoRow.implicitWidth
+          implicitHeight: whoRow.implicitHeight
+          RowLayout {
+            id: whoRow
+            anchors.left: parent.left
             spacing: Theme.sp(6)
             Repeater {
                 model: root.d.people.slice(0, root.compact || root.narrow ? 3 : 2)
@@ -248,6 +253,7 @@ Item {
                 font.pixelSize: Theme.small
             }
             Txt { visible: root.d.people.length === 0 && !root.narrow; text: "Unassigned"; color: Theme.placeholder; font.pixelSize: Theme.small }
+          }
         }
     }
     Component {
@@ -257,12 +263,12 @@ Item {
             implicitHeight: badge.implicitHeight
             DueBadge {
                 id: badge
-                anchors.right: parent.right
+                anchors.horizontalCenter: parent.horizontalCenter
                 visible: !!root.d.due
                 text: root.d.due ? root.d.due.text : ""
                 tone: root.d.due ? root.d.due.tone : ""
             }
-            Txt { id: none; anchors.right: parent.right; visible: !root.d.due && !root.narrow; text: "—"; color: Theme.placeholder; font.pixelSize: Theme.small }
+            Txt { id: none; anchors.horizontalCenter: parent.horizontalCenter; visible: !root.d.due && !root.narrow; text: "—"; color: Theme.placeholder; font.pixelSize: Theme.small }
         }
     }
 }

@@ -62,6 +62,10 @@ QtObject {
         return Math.max(1, Math.round(px * spacingScale * zoom))
     }
 
+    // Projects list columns (ProjectRow / ProjectLabels).
+    readonly property real projectCountWidth: sp(90)
+    readonly property real projectActionsWidth: sp(200)
+
     property color bg: c("bg", "#101315")
     property color bgDark: c("bgDark", "#0c0e10")
     property color fg: c("fg", "#cacccc")

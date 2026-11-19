@@ -7,6 +7,6 @@ Exec=omniscient
 Icon=io.github.anavarre.Omniscient
 Terminal=false
 Categories=Office;ProjectManagement;
-Keywords=tasks;todo;projects;planning;taskestra;
+Keywords=tasks;todo;projects;planning;
 StartupWMClass=io.github.anavarre.Omniscient
 StartupNotify=true

@@ -781,10 +781,12 @@ impl Controller {
             };
             let revealed = self.revealed.contains(&skey);
             let total = section.tasks.len() + section.hidden.len();
+            // "Collaborators" once any task in the section has several.
+            let plural = section.tasks.iter().chain(section.hidden.iter()).any(|id| s.task(*id).is_some_and(|t| t.people.len() > 1));
             Self::push(
                 out,
                 format!("s:{skey}"),
-                json!({"kind": "section", "title": section.title, "count": total, "projectId": section.project, "first": si == 0,
+                json!({"kind": "section", "title": section.title, "count": total, "projectId": section.project, "first": si == 0, "plural": plural,
                        "tone": match section.title.as_str() { "Overdue" => "overdue", "Today" => "today", _ => "" }}),
             );
             let shown = section.tasks.iter().chain(if revealed { section.hidden.iter() } else { [].iter() });
@@ -886,6 +888,9 @@ impl Controller {
         let (archived, active): (Vec<_>, Vec<_>) = s.projects.iter().partition(|p| p.archived());
         if active.is_empty() {
             Self::push(out, "empty".into(), json!({"kind": "empty", "title": "No projects yet", "text": "Press P to create one."}));
+        }
+        if !active.is_empty() {
+            Self::push(out, "pl".into(), json!({"kind": "projectLabels"}));
         }
         for (i, p) in active.iter().enumerate() {
             Self::push(
