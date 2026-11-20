@@ -21,6 +21,6 @@ Item {
         Item { Layout.preferredWidth: Theme.sp(8) }
         Txt { text: "Project"; color: Theme.fgDim; font.pixelSize: Theme.body; font.bold: true; Layout.fillWidth: true }
         Txt { text: "Open tasks"; color: Theme.fgDim; font.pixelSize: Theme.body; font.bold: true; horizontalAlignment: Text.AlignLeft; Layout.preferredWidth: Theme.projectCountWidth }
-        Txt { text: "Actions"; color: Theme.fgDim; font.pixelSize: Theme.body; font.bold: true; horizontalAlignment: Text.AlignLeft; Layout.preferredWidth: Theme.projectActionsWidth }
+        Txt { text: "Actions"; color: Theme.fgDim; font.pixelSize: Theme.body; font.bold: true; horizontalAlignment: Text.AlignHCenter; Layout.preferredWidth: Theme.projectActionsWidth }
     }
 }

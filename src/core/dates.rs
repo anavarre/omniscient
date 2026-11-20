@@ -211,6 +211,17 @@ pub fn describe(d: NaiveDate, today: NaiveDate) -> String {
     }
 }
 
+/// Distance from today for the When? header: "today", "in 3 days", "2 days ago".
+pub fn relative(d: NaiveDate, today: NaiveDate) -> String {
+    match (d - today).num_days() {
+        0 => "today".into(),
+        1 => "tomorrow".into(),
+        -1 => "yesterday".into(),
+        n if n > 1 => format!("in {n} days"),
+        n => format!("{} days ago", -n),
+    }
+}
+
 pub fn long(d: NaiveDate) -> String {
     d.format("%A, %B %-d").to_string()
 }
@@ -297,6 +308,8 @@ mod tests {
         assert_eq!(day_month_year(d(2026, 3, 5)), "5 Mar 2026");
         assert_eq!(describe(d(2026, 10, 2), t()), "Tomorrow · Fri, Oct 2");
         assert_eq!(describe(d(2026, 10, 6), t()), "Tue, Oct 6 · in 5 days");
+        assert_eq!(relative(d(2026, 10, 6), t()), "in 5 days");
+        assert_eq!(relative(d(2026, 10, 2), t()), "tomorrow");
         assert_eq!(long(d(2026, 10, 1)), "Thursday, October 1");
     }
 }

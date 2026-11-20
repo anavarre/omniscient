@@ -27,6 +27,8 @@ pub mod qobject {
         include!("keys.h");
         #[cxx_name = "omniscientPostKey"]
         fn post_key_event(key: i32, modifiers: i32, text: &QString);
+        #[cxx_name = "omniscientPostMouse"]
+        fn post_mouse_event(x: f64, y: f64, click: bool);
         #[cxx_name = "omniscientGrab"]
         fn grab_window(path: &QString) -> bool;
     }
@@ -66,6 +68,11 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "postKey"]
         fn post_key(self: &App, key: i32, modifiers: i32, text: &QString);
+
+        /// Smoke-test replay: a real mouse move (and click) at window coordinates.
+        #[qinvokable]
+        #[cxx_name = "postMouse"]
+        fn post_mouse(self: &App, x: f64, y: f64, click: bool);
 
         /// Saves the window as an image (smoke screenshots).
         #[qinvokable]
@@ -271,6 +278,10 @@ impl qobject::App {
 
     fn post_key(&self, key: i32, modifiers: i32, text: &QString) {
         qobject::post_key_event(key, modifiers, text);
+    }
+
+    fn post_mouse(&self, x: f64, y: f64, click: bool) {
+        qobject::post_mouse_event(x, y, click);
     }
 
     /// Pushes the controller's current rows and state to QML.

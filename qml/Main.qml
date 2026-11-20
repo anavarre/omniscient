@@ -657,8 +657,8 @@ ApplicationWindow {
 
     // ------------------------------------------------------------ replay
 
-    // OMNISCIENT_DEBUG_KEYS="j k x type:hello S-Return Escape …" sends real
-    // key events one at a time, then commits and quits (smoke tests).
+    // OMNISCIENT_DEBUG_KEYS="j k x type:hello S-Return Escape move:X,Y click:X,Y …"
+    // sends real key/mouse events one at a time, then commits and quits (smoke tests).
     property var replayTokens: []
     Timer {
         id: replayTimer
@@ -699,6 +699,11 @@ ApplicationWindow {
     function sendToken(tok) {
         if (tok === "wait")
             return
+        const mouse = /^(move|click):(\d+),(\d+)$/.exec(tok)
+        if (mouse) {
+            App.postMouse(Number(mouse[2]), Number(mouse[3]), mouse[1] === "click")
+            return
+        }
         if (tok.startsWith("type:")) {
             for (const ch of tok.slice(5).replace(/_/g, " ")) {
                 const k = keyFor(ch)

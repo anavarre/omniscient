@@ -2,7 +2,9 @@ import QtQuick
 import Omniscient
 
 // The card look shared by list rows: hairline borders that join rows of a
-// section into one card, hover and selection (accent bar) states.
+// section into one card, hover and selection (accent bar) states. Selection
+// uses selectedFill, not focusFill: Omarchy derives focusFill from the hover
+// alpha, so a hovered row would look selected too.
 Rectangle {
     id: frame
     property bool first: false
@@ -11,7 +13,7 @@ Rectangle {
     property bool muted: false
     property color base: Theme.card
 
-    color: selected ? Theme.focusFill : hovered ? Theme.hoverFill : muted ? Theme.normalFill : base
+    color: selected ? Theme.selectedFill : hovered ? Theme.hoverFill : muted ? Theme.normalFill : base
 
     Rectangle { visible: frame.first; anchors.top: parent.top; width: parent.width; height: 1; color: Theme.hairline }
     Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.hairline }

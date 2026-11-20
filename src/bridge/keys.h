@@ -20,6 +20,31 @@ inline void omniscientPostKey(int key, int modifiers, const QString& text)
     QGuiApplication::sendEvent(window, &release);
 }
 
+#include <QtGui/QMouseEvent>
+#include <QtGui/QPointingDevice>
+
+// Sends a real mouse move (and press/release when `click`) at window
+// coordinates, so replays can exercise hover and tap paths.
+inline void omniscientPostMouse(double x, double y, bool click)
+{
+    QWindow* window = QGuiApplication::focusWindow();
+    if (!window && !QGuiApplication::topLevelWindows().isEmpty())
+        window = QGuiApplication::topLevelWindows().first();
+    if (!window)
+        return;
+    const QPointF local(x, y);
+    const QPointF global = window->mapToGlobal(local);
+    const auto* dev = QPointingDevice::primaryPointingDevice();
+    QMouseEvent move(QEvent::MouseMove, local, local, global, Qt::NoButton, Qt::NoButton, Qt::NoModifier, dev);
+    QGuiApplication::sendEvent(window, &move);
+    if (!click)
+        return;
+    QMouseEvent press(QEvent::MouseButtonPress, local, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier, dev);
+    QGuiApplication::sendEvent(window, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, local, local, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier, dev);
+    QGuiApplication::sendEvent(window, &release);
+}
+
 #include <QtQuick/QQuickWindow>
 
 // Renders the window and saves it (screenshots for smoke runs; works on the

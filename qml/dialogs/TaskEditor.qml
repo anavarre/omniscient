@@ -153,19 +153,12 @@ Modal {
             Layout.fillWidth: true
             Layout.preferredWidth: 1
             spacing: Theme.sp(6)
-            RowLayout {
+            // Header and field mirror WHO? exactly so the two columns line up.
+            FieldLabel {
                 Layout.fillWidth: true
-                spacing: Theme.sp(4)
-                FieldLabel { text: "WHEN?"; Layout.fillWidth: true }
-                Repeater {
-                    model: [["Today", "today"], ["Tomorrow", "tom"], ["Next week", "next week"], ["None", ""]]
-                    Chip {
-                        required property var modelData
-                        text: modelData[0]
-                        clickable: true
-                        onClicked: when.text = modelData[1]
-                    }
-                }
+                text: "WHEN?" + (when.parsed.invalid ? "  (not a date I understand)"
+                               : when.parsed.relative ? "  (" + when.parsed.relative + ")" : "")
+                color: when.parsed.invalid ? Theme.red : Theme.fgDim
             }
             Field {
                 id: when
@@ -175,11 +168,18 @@ Modal {
                 invalid: !!parsed.invalid
                 onAccepted: root.save()
             }
-            Txt {
-                text: when.parsed.invalid ? "Not a date I understand" : when.parsed.text || "No date"
-                color: when.parsed.invalid ? Theme.red : Theme.fgDim
-                font.pixelSize: Theme.caption
-                Layout.fillWidth: true
+            // Quick picks sit below the field so they don't push it out of line with WHO?.
+            RowLayout {
+                spacing: Theme.sp(4)
+                Repeater {
+                    model: [["Today", "today"], ["Tomorrow", "tom"], ["Next week", "next week"]]
+                    Chip {
+                        required property var modelData
+                        text: modelData[0]
+                        clickable: true
+                        onClicked: when.text = modelData[1]
+                    }
+                }
             }
         }
         ColumnLayout {

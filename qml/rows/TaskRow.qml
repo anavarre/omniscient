@@ -138,7 +138,6 @@ Item {
                     clickable: true
                     onClicked: Store.go("project", root.d.projectId)
                 }
-                Item { Layout.fillWidth: true }
                 Btn {
                     visible: !root.sub && !root.d.completed && (hover.hovered || root.isCurrent)
                     kind: "flat"
@@ -151,6 +150,7 @@ Item {
                     rightPadding: Theme.sp(6)
                     onClicked: Store.newTask({ parentId: root.d.id })
                 }
+                Item { Layout.fillWidth: true }
             }
             Txt {
                 visible: root.d.notes !== ""
@@ -271,12 +271,12 @@ Item {
             implicitHeight: badge.implicitHeight
             DueBadge {
                 id: badge
-                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.left: parent.left
                 visible: !!root.d.due
                 text: root.d.due ? root.d.due.text : ""
                 tone: root.d.due ? root.d.due.tone : ""
             }
-            Txt { id: none; anchors.horizontalCenter: parent.horizontalCenter; visible: !root.d.due && !root.narrow; text: "—"; color: Theme.placeholder; font.pixelSize: Theme.small }
+            Txt { id: none; anchors.left: parent.left; visible: !root.d.due && !root.narrow; text: "—"; color: Theme.placeholder; font.pixelSize: Theme.small }
         }
     }
 }

@@ -661,7 +661,7 @@ impl Controller {
                     return Ok(json!({ "empty": true }));
                 }
                 Ok(match dates::parse(text, s.today) {
-                    Some(d) => json!({ "iso": dates::iso(d), "text": dates::describe(d, s.today) }),
+                    Some(d) => json!({ "iso": dates::iso(d), "text": dates::describe(d, s.today), "relative": dates::relative(d, s.today) }),
                     None => json!({ "invalid": true }),
                 })
             }

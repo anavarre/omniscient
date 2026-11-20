@@ -42,7 +42,7 @@ FocusScope {
         return selected.map(s => s.id)
     }
 
-    // Suggestions open when you type, or on ↓ / Enter in an empty field.
+    // Suggestions open when you type, on click, or on ↓ / Enter in an empty field.
     property bool browsing: false
     readonly property var results: {
         if (!field.activeFocus || (field.text === "" && !browsing))
@@ -104,6 +104,9 @@ FocusScope {
                 readonly property real rest: lastChip ? flow.width - (lastChip.x + lastChip.width + flow.spacing) : flow.width
                 width: rest >= Theme.sp(40) ? rest : flow.width
                 onActiveFocusChanged: if (!activeFocus) root.browsing = false
+                // The TextField eats the press, so the box's TapHandler never
+                // sees clicks on the text area itself: open the list here too.
+                onReleased: root.browsing = true
                 placeholderText: root.selected.length === 0 ? root.placeholder : ""
                 topPadding: Theme.sp(4)
                 bottomPadding: Theme.sp(4)
