@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Arch, like Omarchy: current Qt 6 and Rust (Ubuntu's Qt is too old).
+    container: archlinux:latest
+    steps:
+      - name: Install toolchain and Qt
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git rust qt6-base qt6-declarative qt6-shadertools
+
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release --locked

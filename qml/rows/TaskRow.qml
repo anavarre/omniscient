@@ -253,6 +253,14 @@ Item {
                 font.pixelSize: Theme.small
             }
             Txt { visible: root.d.people.length === 0 && !root.narrow; text: "Unassigned"; color: Theme.placeholder; font.pixelSize: Theme.small }
+
+            // Names collapse to initials (and "+N") when there are more than
+            // two people or the column is tight; hovering lists everyone.
+            HoverHandler { id: whoHover }
+            ToolTip.visible: whoHover.hovered && root.d.people.length > 0
+                             && (root.compact || root.narrow || root.d.people.length > 2)
+            ToolTip.text: root.d.people.map(p => p.name).join("\n")
+            ToolTip.delay: 400
           }
         }
     }
